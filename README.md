@@ -9,6 +9,7 @@ Private, single-admin dashboard for monitoring GigClickers jobs and delivering a
 - Worker: `project-g-api`
 - Vercel project: `project-g`
 - Supabase project: `project-g` (`dmnzsknqynysqpapilwu`)
+- Turnstile widget: `project-g-login` (managed, production hostname only)
 - GitHub: `ArabibZ/project-g` (private)
 
 ## Architecture

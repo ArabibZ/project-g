@@ -8,7 +8,7 @@
 - [x] Worker and SQLite Durable Object deployed.
 - [x] Worker secrets configured outside source control.
 - [x] Vercel monorepo linked, built, and production alias assigned.
-- [ ] Real managed Turnstile widget created and both production keys installed.
+- [x] Real managed Turnstile widget created and both production keys installed.
 
 ## Security
 
@@ -37,8 +37,8 @@
 
 - [x] ESLint, strict TypeScript, Bun tests, Worker build, and Next production build pass.
 - [x] Desktop/mobile login and authenticated admin smoke pass with zero browser console errors.
-- [ ] Real Turnstile login, TOTP challenge, and logout smoke pass.
+- [x] Real widget render and Cloudflare secret/hostname validation pass; real password, TOTP, AAL2, refresh, and logout production smoke pass.
 - [x] Protected direct routes deny unauthenticated requests; authenticated admin routes pass mobile smoke.
 - [x] Secret scan, git status/diff review, private GitHub push complete.
 
-Turnstile remains the only external-access prerequisite. Never use Cloudflare test keys in production and never weaken login while it is unavailable.
+Production uses the real managed widget and never uses Cloudflare test keys. Automated Chromium remained challenged by Turnstile as intended; verification did not inject tokens, alter the widget, or bypass the challenge.
