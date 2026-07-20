@@ -39,6 +39,6 @@
 - [x] Desktop/mobile login and authenticated admin smoke pass with zero browser console errors.
 - [ ] Real Turnstile login, TOTP challenge, and logout smoke pass.
 - [x] Protected direct routes deny unauthenticated requests; authenticated admin routes pass mobile smoke.
-- [ ] Secret scan, git status/diff review, private GitHub push complete.
+- [x] Secret scan, git status/diff review, private GitHub push complete.
 
 Turnstile remains the only external-access prerequisite. Never use Cloudflare test keys in production and never weaken login while it is unavailable.
