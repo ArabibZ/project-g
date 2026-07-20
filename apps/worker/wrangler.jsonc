@@ -1,0 +1,48 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "project-g-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-20",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "COORDINATOR",
+        "class_name": "SchedulerCoordinator"
+      }
+    ]
+  },
+  "exports": {
+    "SchedulerCoordinator": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
+  },
+  "vars": {
+    "SUPABASE_URL": "https://dmnzsknqynysqpapilwu.supabase.co",
+    "CORS_ORIGIN": "https://project-g-ten-rouge.vercel.app",
+    "PUBLIC_API_URL": "https://project-g-api.arabibz.workers.dev",
+    "TURNSTILE_HOSTNAME": "project-g-ten-rouge.vercel.app"
+  },
+  "secrets": {
+    "required": [
+      "SUPABASE_PUBLISHABLE_KEY",
+      "SUPABASE_SERVICE_ROLE_KEY",
+      "TURNSTILE_SECRET",
+      "TOKEN_ENCRYPTION_KEY",
+      "SECURITY_HMAC_KEY",
+      "INTERNAL_API_SECRET"
+    ]
+  },
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "head_sampling_rate": 1
+    },
+    "traces": {
+      "enabled": false
+    }
+  }
+}

@@ -1,0 +1,27 @@
+project_id = "project-g"
+
+[auth]
+enabled = true
+site_url = "https://project-g-ten-rouge.vercel.app"
+additional_redirect_urls = [
+  "https://project-g-ten-rouge.vercel.app/auth/recovery",
+  "http://localhost:3000/auth/recovery",
+]
+jwt_expiry = 3600
+enable_signup = false
+enable_anonymous_sign_ins = false
+minimum_password_length = 12
+password_requirements = "lower_upper_letters_digits_symbols"
+
+[auth.email]
+enable_signup = true
+enable_confirmations = true
+double_confirm_changes = true
+secure_password_change = true
+
+[auth.mfa.totp]
+enroll_enabled = true
+verify_enabled = true
+
+[storage.vector]
+enabled = false
