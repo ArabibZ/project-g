@@ -31,6 +31,20 @@ Each genuine new job creates at most one delivery per chat. Temporary known fail
 
 No forgot-password link is public. Start recovery only from Supabase Dashboard for the admin email. Redirect target must be exact production `/auth/recovery`. After password replacement, all sessions are signed out.
 
+## Read Cache And Quota
+
+Every protected read performs fresh JWT, AAL2, live-session, and admin authorization. Only the resulting non-secret data payload can be cached.
+
+- Dashboard and sources: 5 seconds.
+- Bot and subscribers: 10 seconds.
+- Job history: 15 seconds.
+- Maximum: 64 entries per Worker isolate.
+- Successful mutations and Telegram webhook handling clear that isolate's cache.
+
+The cache is intentionally memory-only and best-effort. Another isolate or scheduler alarm can leave a read stale only until its short TTL expires. Never extend this cache to authorization, sessions, tokens, secrets, login, MFA, recovery, or mutation responses. External API responses stay `no-store`.
+
+Vercel Functions must remain in `sin1` through `apps/web/vercel.json`. Protected pages server-load once; admin links keep `prefetch={false}`. Reintroducing client mount GETs or admin link prefetch increases Vercel, Worker, and Supabase usage.
+
 ## Incident Checks
 
 1. Check Worker health and structured logs; logs must not contain tokens, cookies, source HTML, or secrets.
@@ -38,3 +52,4 @@ No forgot-password link is public. Start recovery only from Supabase Dashboard f
 3. Leave the scheduler paused if source structure changed; update parser plus fixture/tests first.
 4. Rotate compromised Worker secrets in Cloudflare and matching Vercel server env where applicable.
 5. Rotate Telegram token through the UI; same-bot rotation preserves subscribers, different bot archives them.
+6. If reads slow down, confirm Vercel functions still report `sin1`, then compare direct Worker latency before changing cache TTLs.

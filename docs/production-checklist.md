@@ -8,6 +8,7 @@
 - [x] Worker and SQLite Durable Object deployed.
 - [x] Worker secrets configured outside source control.
 - [x] Vercel monorepo linked, built, and production alias assigned.
+- [x] Dynamic Vercel Functions pinned to Singapore (`sin1`) beside Supabase.
 - [x] Real managed Turnstile widget created and both production keys installed.
 
 ## Security
@@ -31,7 +32,17 @@
 - [x] First real scheduled cycle stored 211 baseline jobs with zero deliveries.
 - [x] Later real cycle saw the same 211 IDs and saved zero duplicates.
 - [x] Scheduler left armed with next random run persisted.
-- [x] Post-hardening runs persist `forced_notifications_off=true`; Telegram remains disconnected and deliveries remain zero.
+- [x] Pre-bot hardening runs persisted `forced_notifications_off=true`; baseline notifications and deliveries remained zero.
+
+## Performance And Quota
+
+- [x] Shared layout auth plus hydration GET waterfall replaced by one server-loaded protected request.
+- [x] Admin link prefetch disabled; production idle navigation generated zero speculative admin RSC requests.
+- [x] Admin authorization collapsed to one RPC and dashboard reads collapsed to one aggregate RPC.
+- [x] Post-authorization 64-entry TTL cache verified for hit, expiry, eviction, invalidation, rejection, request-local misses, and in-flight invalidation.
+- [x] Initial dashboard generated zero browser `/api/dashboard` requests on desktop and mobile.
+- [x] Dashboard page p50 improved `1319ms -> 52ms`; BFF p50 improved `1644ms -> 116ms`.
+- [x] Cold desktop LCP measured `2.02s`, warm LCP `120-880ms`, and simulated mobile 4G LCP `940ms`; CLS remained zero.
 
 ## Release
 
