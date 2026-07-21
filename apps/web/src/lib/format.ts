@@ -15,11 +15,11 @@ export function formatDhaka(value: string | null): string {
   return Number.isNaN(date.getTime()) ? "Unknown" : `${dhakaDateTime.format(date)} Dhaka`;
 }
 
-export function formatRelative(value: string | null): string {
+export function formatRelative(value: string | null, now = Date.now()): string {
   if (!value) return "Not yet";
   const time = new Date(value).getTime();
   if (Number.isNaN(time)) return "Unknown";
-  const seconds = Math.round((time - Date.now()) / 1000);
+  const seconds = Math.round((time - now) / 1000);
   if (Math.abs(seconds) < 60) return relative.format(seconds, "second");
   const minutes = Math.round(seconds / 60);
   if (Math.abs(minutes) < 60) return relative.format(minutes, "minute");

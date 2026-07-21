@@ -6,6 +6,7 @@ const MAX_RESPONSE_BYTES = 1024 * 1024;
 
 export type WorkerReply = {
   data: unknown;
+  receivedAt: number;
   status: number;
 };
 
@@ -111,7 +112,12 @@ export async function requestWorker(path: string, options: WorkerRequest = {}): 
     signal: AbortSignal.timeout(15_000)
   });
 
-  return { data: await boundedJson(response), status: response.status };
+  const responseDate = Date.parse(response.headers.get("date") ?? "");
+  return {
+    data: await boundedJson(response),
+    receivedAt: Number.isNaN(responseDate) ? Date.now() : responseDate,
+    status: response.status
+  };
 }
 
 export function responseError(data: unknown, fallback: string): string {

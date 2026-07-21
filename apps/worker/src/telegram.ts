@@ -296,11 +296,6 @@ export type TelegramBotStatus = {
     displayName: string;
     avatarUrl: string | null;
   } | null;
-  health: {
-    healthy: boolean;
-    pendingUpdateCount: number;
-    lastError: string | null;
-  };
 };
 
 export async function botStatus(env: Env): Promise<TelegramBotStatus> {
@@ -310,21 +305,8 @@ export async function botStatus(env: Env): Promise<TelegramBotStatus> {
       connected: false,
       notificationsEnabled: false,
       token: null,
-      identity: null,
-      health: { healthy: false, pendingUpdateCount: 0, lastError: null }
+      identity: null
     };
-  }
-
-  let health: TelegramBotStatus["health"];
-  try {
-    const info = await getWebhookInfo(bot.token);
-    health = {
-      healthy: info.url === webhookUrl(env) && info.last_error_date === undefined,
-      pendingUpdateCount: info.pending_update_count,
-      lastError: info.last_error_message ? "Telegram reported webhook error" : null
-    };
-  } catch {
-    health = { healthy: false, pendingUpdateCount: 0, lastError: "Health check failed" };
   }
 
   return {
@@ -336,8 +318,7 @@ export async function botStatus(env: Env): Promise<TelegramBotStatus> {
       username: bot.settings.username,
       displayName: bot.settings.display_name ?? "Telegram bot",
       avatarUrl: bot.settings.avatar_url
-    },
-    health
+    }
   };
 }
 

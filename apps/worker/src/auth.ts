@@ -22,10 +22,11 @@ const claimsSchema = z.object({
   session_id: z.string().uuid()
 });
 
-const adminProfileSchema = z.object({
-  id: z.string().uuid(),
-  role: z.literal("admin")
-});
+const adminAuthorizationRowSchema = z.object({
+  session_active: z.boolean(),
+  is_admin: z.boolean(),
+  email: z.string().nullable()
+}).strict();
 
 const turnstileSchema = z.object({
   success: z.boolean(),
@@ -52,7 +53,6 @@ type SessionTokens = {
 
 export function validateAdminClaims(
   value: unknown,
-  userId: string,
   expectedIssuer: string,
   requireAal2 = true,
   now = Date.now()
@@ -60,7 +60,6 @@ export function validateAdminClaims(
   const claims = claimsSchema.safeParse(value);
   if (
     !claims.success ||
-    claims.data.sub !== userId ||
     claims.data.iss !== expectedIssuer ||
     !(Array.isArray(claims.data.aud)
       ? claims.data.aud.includes("authenticated")
@@ -75,9 +74,9 @@ export function validateAdminClaims(
   return claims.data;
 }
 
-export function isAdminProfile(value: unknown, userId: string): boolean {
-  const profile = adminProfileSchema.safeParse(value);
-  return profile.success && profile.data.id === userId;
+export function validateAdminAuthorizationRow(value: unknown) {
+  const row = adminAuthorizationRowSchema.safeParse(value);
+  return row.success ? row.data : null;
 }
 
 function tokens(session: {
@@ -100,44 +99,43 @@ export async function requireAdmin(
   requireAal2 = true
 ): Promise<AdminSession> {
   const auth = publicAuth(env);
-  const [{ data: claimsData, error: claimsError }, { data: userData, error: userError }] =
-    await Promise.all([auth.auth.getClaims(accessToken), auth.auth.getUser(accessToken)]);
-
-  if (claimsError || userError || !userData.user) {
+  const { data: claimsData, error: claimsError } = await auth.auth.getClaims(accessToken);
+  if (claimsError) {
     throw new HTTPException(401, { message: "Unauthorized" });
   }
   const claims = validateAdminClaims(
     claimsData?.claims,
-    userData.user.id,
     `${env.SUPABASE_URL.replace(/\/$/, "")}/auth/v1`,
     requireAal2
   );
 
-  const db = adminDb(env);
-  const [sessionResult, profileResult] = await Promise.all([
-    db.rpc("is_auth_session_active", {
-      p_user_id: claims.sub,
-      p_session_id: claims.session_id
-    }),
-    db
-      .from("profiles")
-      .select("id, role")
-      .eq("id", claims.sub)
-      .eq("role", "admin")
-      .maybeSingle()
-  ]);
-  const activeSession = z.boolean().safeParse(sessionResult.data);
-  if (sessionResult.error || !activeSession.success || !activeSession.data) {
+  let authorizationData: unknown;
+  try {
+    const { data, error } = await adminDb(env)
+      .rpc("authorize_admin_session", {
+        p_user_id: claims.sub,
+        p_session_id: claims.session_id
+      })
+      .abortSignal(AbortSignal.timeout(10_000));
+    if (error) throw new Error("Authorization RPC failed");
+    authorizationData = data;
+  } catch {
     throw new HTTPException(401, { message: "Unauthorized" });
   }
-  const { data: profile, error: profileError } = profileResult;
-  if (profileError || !isAdminProfile(profile, claims.sub)) {
+
+  const authorization = Array.isArray(authorizationData) && authorizationData.length === 1
+    ? validateAdminAuthorizationRow(authorizationData[0])
+    : null;
+  if (!authorization?.session_active) {
+    throw new HTTPException(401, { message: "Unauthorized" });
+  }
+  if (!authorization.is_admin) {
     throw new HTTPException(403, { message: "Forbidden" });
   }
 
   return {
     userId: claims.sub,
-    email: userData.user.email ?? "",
+    email: authorization.email ?? "",
     aal: claims.aal,
     accessToken
   };

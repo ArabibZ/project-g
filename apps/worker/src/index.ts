@@ -24,6 +24,7 @@ import {
 import { hmac, secureEqual } from "./lib/crypto";
 import { adminDb } from "./lib/db";
 import { parseJson } from "./lib/http";
+import { cachedRead, invalidateReadCache } from "./lib/read-cache";
 import { getSchedulerStub, SchedulerCoordinator } from "./scheduler";
 import { scrapeSource } from "./scraper";
 import {
@@ -46,10 +47,9 @@ type AppEnv = { Bindings: Env };
 const DB_TIMEOUT_MS = 10_000;
 const SOURCE_COLUMNS =
   "id, url, normalized_url, enabled, position, baseline_completed, last_checked_at, last_failed_at, failure_count, last_error";
-const JOB_COLUMNS =
-  "job_id, name, done_count, total_target, payment, details_url, source_url, first_seen_at";
 
 const uuidSchema = z.string().uuid();
+const countSchema = z.number().int().nonnegative().refine(Number.isSafeInteger);
 const sourceRowSchema = z.object({
   id: z.string().uuid(),
   url: z.string().url(),
@@ -61,7 +61,7 @@ const sourceRowSchema = z.object({
   last_failed_at: z.string().nullable(),
   failure_count: z.number().int().nonnegative(),
   last_error: z.string().nullable()
-});
+}).strict();
 const jobRowSchema = z.object({
   job_id: z.string().min(1),
   name: z.string().min(1),
@@ -71,16 +71,28 @@ const jobRowSchema = z.object({
   details_url: z.string().url(),
   source_url: z.string().url(),
   first_seen_at: z.string().min(1)
-});
-const schedulerRowSchema = z.object({
-  status: z.enum(["waiting", "checking", "pausing", "paused", "no_active_sources", "error"]),
+}).strict();
+const schedulerStatusSchema = z.enum([
+  "waiting",
+  "checking",
+  "pausing",
+  "paused",
+  "no_active_sources",
+  "error"
+]);
+const dashboardRowSchema = z.object({
+  today_jobs: countSchema,
+  total_sources: countSchema,
+  active_sources: countSchema,
+  scheduler_status: schedulerStatusSchema,
   last_check_at: z.string().nullable(),
-  next_run_at: z.string().nullable()
-});
-const botSettingsRowSchema = z.object({
-  connected: z.boolean(),
-  bot_id: z.number().int().nullable()
-});
+  next_run_at: z.string().nullable(),
+  bot_users_total: countSchema,
+  bot_users_on: countSchema,
+  bot_users_off: countSchema,
+  bot_users_pending: countSchema,
+  latest_jobs: z.array(jobRowSchema)
+}).strict();
 const cursorSchema = z.object({
   t: z.string().datetime({ offset: true }).max(64),
   id: z.string().regex(/^\d+$/)
@@ -287,84 +299,29 @@ async function stopSchedulerWithoutSources(env: Env): Promise<void> {
 }
 
 async function dashboard(env: Env) {
-  const db = adminDb(env);
-  const [today, totalSources, activeSources, state, latestJobs, botSettings] = await Promise.all([
-    db
-      .from("jobs")
-      .select("job_id", { count: "exact", head: true })
-      .eq("dhaka_day", dhakaDayStart().slice(0, 10))
-      .eq("is_baseline", false)
-      .abortSignal(dbSignal()),
-    db.from("sources").select("id", { count: "exact", head: true }).abortSignal(dbSignal()),
-    db
-      .from("sources")
-      .select("id", { count: "exact", head: true })
-      .eq("enabled", true)
-      .abortSignal(dbSignal()),
-    db
-      .from("scraper_state")
-      .select("status, last_check_at, next_run_at")
-      .eq("singleton", true)
-      .abortSignal(dbSignal())
-      .single(),
-    db
-      .from("jobs")
-      .select(JOB_COLUMNS)
-      .order("first_seen_at", { ascending: false })
-      .order("job_id", { ascending: false })
-      .limit(10)
-      .abortSignal(dbSignal()),
-    db
-      .from("telegram_bot_settings")
-      .select("connected, bot_id")
-      .eq("singleton", true)
-      .abortSignal(dbSignal())
-      .single()
-  ]);
-  if (
-    today.error ||
-    totalSources.error ||
-    activeSources.error ||
-    state.error ||
-    latestJobs.error ||
-    botSettings.error
-  ) {
-    throw new Error("Unable to load dashboard");
-  }
-
-  const storedState = schedulerRowSchema.parse(state.data);
-  const storedBot = botSettingsRowSchema.parse(botSettings.data);
-  const botUsers = { total: 0, on: 0, off: 0, pending: 0 };
-  if (storedBot.connected) {
-    if (storedBot.bot_id === null) throw new Error("Telegram connection is incomplete");
-    const current = (query: ReturnType<typeof adminDb>) => query
-      .from("telegram_subscribers")
-      .select("id", { count: "exact", head: true })
-      .eq("bot_id", storedBot.bot_id)
-      .is("archived_at", null);
-    const [all, on, pending] = await Promise.all([
-      current(adminDb(env)).abortSignal(dbSignal()),
-      current(adminDb(env)).eq("status", "active").eq("disabled_by_admin", false).abortSignal(dbSignal()),
-      current(adminDb(env)).eq("status", "pending").abortSignal(dbSignal())
-    ]);
-    if (all.error || on.error || pending.error) throw new Error("Unable to load bot users");
-    botUsers.total = all.count ?? 0;
-    botUsers.on = on.count ?? 0;
-    botUsers.pending = pending.count ?? 0;
-    botUsers.off = Math.max(0, botUsers.total - botUsers.on - botUsers.pending);
-  }
+  const { data, error } = await adminDb(env)
+    .rpc("get_dashboard", { p_dhaka_day: dhakaDayStart().slice(0, 10) })
+    .abortSignal(dbSignal());
+  if (error) throw new Error("Unable to load dashboard");
+  const row = z.array(dashboardRowSchema).length(1).parse(data)[0];
+  if (!row) throw new Error("Unable to load dashboard");
 
   return {
-    todayJobs: today.count ?? 0,
-    botUsers,
-    activeSources: activeSources.count ?? 0,
-    totalSources: totalSources.count ?? 0,
-    scheduler: {
-      status: storedState.status,
-      lastCheckAt: storedState.last_check_at,
-      nextRunAt: storedState.next_run_at
+    todayJobs: row.today_jobs,
+    botUsers: {
+      total: row.bot_users_total,
+      on: row.bot_users_on,
+      off: row.bot_users_off,
+      pending: row.bot_users_pending
     },
-    latestJobs: z.array(jobRowSchema).parse(latestJobs.data).map(jobJson)
+    activeSources: row.active_sources,
+    totalSources: row.total_sources,
+    scheduler: {
+      status: row.scheduler_status,
+      lastCheckAt: row.last_check_at,
+      nextRunAt: row.next_run_at
+    },
+    latestJobs: row.latest_jobs.map(jobJson)
   };
 }
 
@@ -410,9 +367,11 @@ app.use("/api/*", async (context, next) => {
 });
 
 app.get("/health", (context) => context.json({ ok: true }));
-app.all("/telegram/webhook", (context) =>
-  handleTelegramWebhook(context.env, context.req.raw)
-);
+app.all("/telegram/webhook", async (context) => {
+  const response = await handleTelegramWebhook(context.env, context.req.raw);
+  if (response.ok) invalidateReadCache();
+  return response;
+});
 
 app.post("/api/auth/login", (context) =>
   login(context, safeClientIp(context.req.header("x-client-ip")))
@@ -429,14 +388,20 @@ app.get("/api/auth/me", async (context) => {
 });
 
 app.get("/api/dashboard", async (context) => {
-  await adminFromRequest(context, true);
-  return context.json(await dashboard(context.env));
+  const admin = await adminFromRequest(context, true);
+  const env = context.env;
+  return context.json(await cachedRead(
+    JSON.stringify([admin.userId, "/api/dashboard"]),
+    5_000,
+    () => dashboard(env)
+  ));
 });
 
 app.post("/api/scheduler/pause", async (context) => {
   const admin = await adminFromRequest(context, true);
   await enforceMutationLimit(context.env, admin.userId, "scheduler.pause", 10);
   const result = await getSchedulerStub(context.env).requestPause("Paused by admin");
+  invalidateReadCache();
   await audit(context.env, admin.userId, "scheduler.pause", "scheduler", "scheduler-v1");
   return context.json(result);
 });
@@ -445,20 +410,28 @@ app.post("/api/scheduler/resume", async (context) => {
   const admin = await adminFromRequest(context, true);
   await enforceMutationLimit(context.env, admin.userId, "scheduler.resume", 10);
   const result = await getSchedulerStub(context.env).resume();
+  invalidateReadCache();
   await audit(context.env, admin.userId, "scheduler.resume", "scheduler", "scheduler-v1");
   return context.json(result);
 });
 
 app.get("/api/sources", async (context) => {
-  await adminFromRequest(context, true);
-  const { data, error } = await adminDb(context.env)
-    .from("sources")
-    .select(SOURCE_COLUMNS)
-    .order("position", { ascending: true })
-    .order("created_at", { ascending: true })
-    .abortSignal(dbSignal());
-  if (error) throw new Error("Unable to load sources");
-  return context.json({ sources: z.array(sourceRowSchema).parse(data).map(sourceJson) });
+  const admin = await adminFromRequest(context, true);
+  const env = context.env;
+  return context.json(await cachedRead(
+    JSON.stringify([admin.userId, "/api/sources"]),
+    5_000,
+    async () => {
+      const { data, error } = await adminDb(env)
+        .from("sources")
+        .select(SOURCE_COLUMNS)
+        .order("position", { ascending: true })
+        .order("created_at", { ascending: true })
+        .abortSignal(dbSignal());
+      if (error) throw new Error("Unable to load sources");
+      return { sources: z.array(sourceRowSchema).parse(data).map(sourceJson) };
+    }
+  ));
 });
 
 app.post("/api/sources/test", async (context) => {
@@ -497,6 +470,7 @@ app.post("/api/sources", async (context) => {
   if (error?.code === "23505") throw new HTTPException(409, { message: "Source already exists" });
   if (error) throw new Error("Unable to create source");
   const source = sourceRowSchema.parse(data);
+  invalidateReadCache();
   await audit(context.env, admin.userId, "source.create", "source", source.id);
   return context.json({ source: sourceJson(source) }, 201);
 });
@@ -525,6 +499,7 @@ app.patch("/api/sources/:id", async (context) => {
   if (!urlChanged && changes.enabled === undefined) {
     if (input.enabled === true) await notifySourceEnabled(context.env, id);
     if (input.enabled === false) await stopSchedulerWithoutSources(context.env);
+    invalidateReadCache();
     return context.json({ source: sourceJson(current) });
   }
 
@@ -539,6 +514,7 @@ app.patch("/api/sources/:id", async (context) => {
   if (error) throw new Error("Unable to update source");
   if (!data) throw new HTTPException(404, { message: "Source not found" });
   const updated = sourceRowSchema.parse(data);
+  invalidateReadCache();
   await audit(context.env, admin.userId, "source.update", "source", id, {
     urlChanged,
     enabled: updated.enabled
@@ -562,6 +538,7 @@ app.delete("/api/sources/:id", async (context) => {
     .maybeSingle();
   if (error) throw new Error("Unable to delete source");
   if (!data) throw new HTTPException(404, { message: "Source not found" });
+  invalidateReadCache();
   await audit(context.env, admin.userId, "source.delete", "source", id);
   await stopSchedulerWithoutSources(context.env);
   return context.json({ ok: true });
@@ -585,12 +562,13 @@ app.put("/api/sources/order", async (context) => {
     .rpc("reorder_sources", { p_source_ids: ids })
     .abortSignal(dbSignal());
   if (reorderError) throw new Error("Unable to reorder sources");
+  invalidateReadCache();
   await audit(context.env, admin.userId, "source.reorder", "source", null, { count: ids.length });
   return context.json({ ok: true });
 });
 
 app.get("/api/jobs", async (context) => {
-  await adminFromRequest(context, true);
+  const admin = await adminFromRequest(context, true);
   const url = new URL(context.req.url);
   if (url.searchParams.getAll("q").length > 1 || url.searchParams.getAll("cursor").length > 1) {
     throw new HTTPException(400, { message: "Invalid query" });
@@ -598,27 +576,39 @@ app.get("/api/jobs", async (context) => {
   const query = (url.searchParams.get("q") ?? "").trim();
   if (query.length > 120) throw new HTTPException(400, { message: "Search query is too long" });
   const cursor = decodeCursor(url.searchParams.get("cursor"));
-  const { data, error } = await adminDb(context.env)
-    .rpc("list_jobs", {
-      p_query: query || null,
-      p_cursor_time: cursor?.t ?? null,
-      p_cursor_job_id: cursor?.id ?? null,
-      p_limit: 26
-    })
-    .abortSignal(dbSignal());
-  if (error) throw new Error("Unable to load jobs");
-  const rows = z.array(jobRowSchema).parse(data);
-  const jobs = rows.slice(0, 25);
-  const last = jobs.at(-1);
-  return context.json({
-    jobs: jobs.map(jobJson),
-    nextCursor: rows.length === 26 && last ? encodeCursor(last) : null
-  });
+  const env = context.env;
+  return context.json(await cachedRead(
+    JSON.stringify([admin.userId, "/api/jobs", query, cursor]),
+    15_000,
+    async () => {
+      const { data, error } = await adminDb(env)
+        .rpc("list_jobs", {
+          p_query: query || null,
+          p_cursor_time: cursor?.t ?? null,
+          p_cursor_job_id: cursor?.id ?? null,
+          p_limit: 26
+        })
+        .abortSignal(dbSignal());
+      if (error) throw new Error("Unable to load jobs");
+      const rows = z.array(jobRowSchema).parse(data);
+      const jobs = rows.slice(0, 25);
+      const last = jobs.at(-1);
+      return {
+        jobs: jobs.map(jobJson),
+        nextCursor: rows.length === 26 && last ? encodeCursor(last) : null
+      };
+    }
+  ));
 });
 
 app.get("/api/bot", async (context) => {
-  await adminFromRequest(context, true);
-  return context.json(botJson(await botStatus(context.env)));
+  const admin = await adminFromRequest(context, true);
+  const env = context.env;
+  return context.json(await cachedRead(
+    JSON.stringify([admin.userId, "/api/bot"]),
+    10_000,
+    async () => botJson(await botStatus(env))
+  ));
 });
 
 app.post("/api/bot/connect", async (context) => {
@@ -637,6 +627,7 @@ app.post("/api/bot/connect", async (context) => {
     }
     throw error;
   }
+  invalidateReadCache();
   await audit(context.env, admin.userId, "bot.connect", "telegram_bot", status.identity?.id ?? null);
   return context.json(botJson(status));
 });
@@ -645,6 +636,7 @@ app.post("/api/bot/disconnect", async (context) => {
   const admin = await adminFromRequest(context, true);
   await enforceMutationLimit(context.env, admin.userId, "bot.disconnect", 5, 600);
   await disconnectBot(context.env);
+  invalidateReadCache();
   await audit(context.env, admin.userId, "bot.disconnect", "telegram_bot", null);
   return context.json({ connected: false as const });
 });
@@ -657,6 +649,7 @@ app.post("/api/bot/test", async (context) => {
   );
   if (!subscriber) throw new HTTPException(400, { message: "No active subscriber available" });
   const result = await sendTest(context.env, subscriber.id);
+  invalidateReadCache();
   await audit(context.env, admin.userId, "bot.test", "telegram_subscriber", subscriber.id);
   return context.json(result);
 });
@@ -669,15 +662,19 @@ app.patch("/api/bot/master", async (context) => {
     throw new HTTPException(409, { message: "Telegram bot is not connected" });
   }
   const result = await setMasterNotifications(context.env, enabled);
+  invalidateReadCache();
   await audit(context.env, admin.userId, "bot.master", "telegram_bot", null, { enabled });
   return context.json(result);
 });
 
 app.get("/api/bot/subscribers", async (context) => {
-  await adminFromRequest(context, true);
-  return context.json({
-    subscribers: (await listSubscribers(context.env)).map(subscriberJson)
-  });
+  const admin = await adminFromRequest(context, true);
+  const env = context.env;
+  return context.json(await cachedRead(
+    JSON.stringify([admin.userId, "/api/bot/subscribers"]),
+    10_000,
+    async () => ({ subscribers: (await listSubscribers(env)).map(subscriberJson) })
+  ));
 });
 
 app.patch("/api/bot/subscribers/:id", async (context) => {
@@ -697,6 +694,7 @@ app.patch("/api/bot/subscribers/:id", async (context) => {
     }
     throw error;
   }
+  invalidateReadCache();
   await audit(context.env, admin.userId, "subscriber.update", "telegram_subscriber", id, { enabled });
   return context.json({ subscriber: subscriberJson(subscriber) });
 });

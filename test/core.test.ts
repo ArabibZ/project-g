@@ -7,7 +7,11 @@ import {
   normalizeSourceUrl,
   sourceUrlSchema
 } from "../packages/shared/src/index";
-import { isAdminProfile, validateAdminClaims } from "../apps/worker/src/auth";
+import {
+  validateAdminAuthorizationRow,
+  validateAdminClaims
+} from "../apps/worker/src/auth";
+import { ReadCache } from "../apps/worker/src/lib/read-cache";
 import { parseJobsHtml } from "../apps/worker/src/scraper";
 import { safeReturnTo } from "../apps/web/src/lib/safe-return-to";
 import {
@@ -199,35 +203,124 @@ describe("admin auth validation", () => {
   };
 
   test("accepts matching unexpired AAL2 admin identity", () => {
-    expect(validateAdminClaims(claims, USER_ID, ISSUER, true, NOW)).toMatchObject({
+    expect(validateAdminClaims(claims, ISSUER, true, NOW)).toMatchObject({
       sub: USER_ID,
       aal: "aal2"
     });
-    expect(isAdminProfile({ id: USER_ID, role: "admin" }, USER_ID)).toBeTrue();
   });
 
   test.each([
-    { ...claims, sub: "fbc90d1b-c50b-48a8-adfb-93b1fcdd100c" },
+    { ...claims, sub: "not-a-uuid" },
+    { ...claims, session_id: "not-a-uuid" },
     { ...claims, iss: "https://evil.example/auth/v1" },
     { ...claims, aud: "anon" },
+    { ...claims, role: "service_role" },
     { ...claims, exp: Math.floor(NOW / 1000) }
-  ])("rejects mismatched or expired claims", (candidate) => {
-    expect(() => validateAdminClaims(candidate, USER_ID, ISSUER, true, NOW))
+  ])("rejects malformed, mismatched, or expired claims", (candidate) => {
+    expect(() => validateAdminClaims(candidate, ISSUER, true, NOW))
       .toThrow("Unauthorized");
   });
 
   test("requires AAL2 only when requested", () => {
     const aal1 = { ...claims, aal: "aal1" };
-    expect(() => validateAdminClaims(aal1, USER_ID, ISSUER, true, NOW))
+    expect(() => validateAdminClaims(aal1, ISSUER, true, NOW))
       .toThrow("MFA_REQUIRED");
-    expect(validateAdminClaims(aal1, USER_ID, ISSUER, false, NOW).aal).toBe("aal1");
+    expect(validateAdminClaims(aal1, ISSUER, false, NOW).aal).toBe("aal1");
   });
 
-  test("rejects non-admin or mismatched profile", () => {
-    expect(isAdminProfile({ id: USER_ID, role: "viewer" }, USER_ID)).toBeFalse();
-    expect(isAdminProfile(
-      { id: "fbc90d1b-c50b-48a8-adfb-93b1fcdd100c", role: "admin" },
-      USER_ID
-    )).toBeFalse();
+  test("strictly validates authorization RPC rows", () => {
+    expect(validateAdminAuthorizationRow({
+      session_active: true,
+      is_admin: true,
+      email: null
+    })).toEqual({ session_active: true, is_admin: true, email: null });
+    expect(validateAdminAuthorizationRow({
+      session_active: true,
+      is_admin: false,
+      email: ""
+    })).toEqual({ session_active: true, is_admin: false, email: "" });
+    expect(validateAdminAuthorizationRow({
+      session_active: "true",
+      is_admin: true,
+      email: null
+    })).toBeNull();
+    expect(validateAdminAuthorizationRow({
+      session_active: true,
+      is_admin: true,
+      email: null,
+      token: "unexpected"
+    })).toBeNull();
+  });
+});
+
+describe("bounded read cache", () => {
+  test("caches successful values until expiry", async () => {
+    let now = 1_000;
+    let loads = 0;
+    const cache = new ReadCache(2, () => now);
+    const load = async () => ++loads;
+
+    expect(await cache.get("dashboard", 100, load)).toBe(1);
+    expect(await cache.get("dashboard", 100, load)).toBe(1);
+    expect(loads).toBe(1);
+    now += 100;
+    expect(await cache.get("dashboard", 100, load)).toBe(2);
+  });
+
+  test("invalidation clears cached values", async () => {
+    let loads = 0;
+    const cache = new ReadCache();
+    const load = async () => ++loads;
+
+    expect(await cache.get("sources", 1_000, load)).toBe(1);
+    cache.invalidate();
+    expect(await cache.get("sources", 1_000, load)).toBe(2);
+  });
+
+  test("does not cache rejected loaders", async () => {
+    let loads = 0;
+    const cache = new ReadCache();
+    const load = async () => {
+      loads += 1;
+      if (loads === 1) throw new Error("load failed");
+      return loads;
+    };
+
+    await expect(cache.get("jobs", 1_000, load)).rejects.toThrow("load failed");
+    expect(await cache.get("jobs", 1_000, load)).toBe(2);
+  });
+
+  test("evicts oldest value at capacity", async () => {
+    let loads = 0;
+    const cache = new ReadCache(2);
+    const load = async () => ++loads;
+
+    await cache.get("a", 1_000, load);
+    await cache.get("b", 1_000, load);
+    await cache.get("c", 1_000, load);
+    expect(await cache.get("a", 1_000, load)).toBe(4);
+  });
+
+  test("keeps in-flight I/O request-local and blocks stale writes after invalidation", async () => {
+    let loads = 0;
+    const releases: Array<() => void> = [];
+    const cache = new ReadCache();
+    const slowLoad = () => {
+      loads += 1;
+      const value = loads;
+      return new Promise<number>((resolve) => {
+        releases.push(() => resolve(value));
+      });
+    };
+
+    const first = cache.get("bot", 1_000, slowLoad);
+    const second = cache.get("bot", 1_000, slowLoad);
+    expect(loads).toBe(2);
+
+    cache.invalidate();
+    expect(await cache.get("bot", 1_000, async () => ++loads)).toBe(3);
+    for (const release of releases) release();
+    expect(await Promise.all([first, second])).toEqual([1, 2]);
+    expect(await cache.get("bot", 1_000, async () => ++loads)).toBe(3);
   });
 });

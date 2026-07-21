@@ -1,6 +1,6 @@
 begin;
 
-select plan(41);
+select plan(45);
 
 select ok(
   not exists (
@@ -29,10 +29,19 @@ select ok(
 select ok(
   pg_catalog.has_function_privilege(
     'service_role',
-    'public.is_auth_session_active(uuid,uuid)',
+    'public.authorize_admin_session(uuid,uuid)',
     'execute'
   ),
-  'service role can validate live auth sessions'
+  'service role can authorize live admin sessions'
+);
+
+select ok(
+  pg_catalog.has_function_privilege(
+    'service_role',
+    'public.get_dashboard(date)',
+    'execute'
+  ),
+  'service role can load dashboard snapshot'
 );
 
 select ok(
@@ -86,6 +95,40 @@ insert into auth.users (
 insert into public.profiles(id, role)
 values ('40000000-0000-4000-8000-000000000001', 'admin');
 
+insert into auth.sessions(id, user_id, created_at, updated_at, not_after)
+values (
+  '41000000-0000-4000-8000-000000000001',
+  '40000000-0000-4000-8000-000000000001',
+  now(),
+  now(),
+  now() + interval '1 hour'
+);
+
+select ok(
+  (
+    select session_active
+      and is_admin
+      and email = 'migration-test@example.invalid'
+    from public.authorize_admin_session(
+      '40000000-0000-4000-8000-000000000001',
+      '41000000-0000-4000-8000-000000000001'
+    )
+  ),
+  'matching live session returns active admin and email'
+);
+
+select ok(
+  (
+    select count(*) = 1
+      and not pg_catalog.bool_or(session_active)
+    from public.authorize_admin_session(
+      '40000000-0000-4000-8000-000000000001',
+      '41000000-0000-4000-8000-000000000002'
+    )
+  ),
+  'session mismatch returns exactly one inactive row'
+);
+
 set local request.jwt.claims = '{"sub":"40000000-0000-4000-8000-000000000001","role":"authenticated","aal":"aal1"}';
 set local role authenticated;
 select is(
@@ -137,6 +180,31 @@ insert into public.telegram_subscribers (
   'active',
   now()
 );
+
+insert into public.telegram_subscribers (
+  id,
+  bot_id,
+  chat_id,
+  status,
+  disabled_by_admin,
+  approved_at
+) values
+  (
+    '20000000-0000-4000-8000-000000000002',
+    123456789,
+    987654322,
+    'pending',
+    false,
+    null
+  ),
+  (
+    '20000000-0000-4000-8000-000000000003',
+    123456789,
+    987654323,
+    'off',
+    true,
+    now()
+  );
 
 insert into public.sources (
   id,
@@ -262,6 +330,24 @@ select is(
   (select new_jobs_saved from public.scrape_runs where id = '30000000-0000-4000-8000-000000000002'),
   1,
   'live run counts inserted job'
+);
+
+select ok(
+  (
+    select dashboard.today_jobs = 1
+      and dashboard.total_sources = 1
+      and dashboard.active_sources = 1
+      and dashboard.scheduler_status = 'paused'
+      and dashboard.bot_users_total = 3
+      and dashboard.bot_users_on = 1
+      and dashboard.bot_users_off = 1
+      and dashboard.bot_users_pending = 1
+      and pg_catalog.jsonb_array_length(dashboard.latest_jobs) = 2
+      and dashboard.latest_jobs->0->>'job_id' = '9002'
+      and dashboard.latest_jobs->1->>'job_id' = '9001'
+    from public.get_dashboard('2026-07-20') as dashboard
+  ),
+  'dashboard returns one consistent aggregate with ordered jobs'
 );
 
 select is(

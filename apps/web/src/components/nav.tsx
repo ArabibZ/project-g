@@ -30,7 +30,7 @@ export function Nav() {
   return (
     <header className="site-header">
       <div className="nav-wrap">
-        <Link href="/dashboard" className="brand" aria-label="Project G dashboard">
+        <Link href="/dashboard" className="brand" aria-label="Project G dashboard" prefetch={false}>
           <span className="brand-mark">G</span>
           <span className="brand-copy">
             <strong>Project G</strong>
@@ -42,6 +42,7 @@ export function Nav() {
             <Link
               href={href}
               key={href}
+              prefetch={false}
               aria-current={pathname === href || pathname.startsWith(`${href}/`) ? "page" : undefined}
             >
               {label}
