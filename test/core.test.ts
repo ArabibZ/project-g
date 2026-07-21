@@ -14,6 +14,7 @@ import {
 import { ReadCache } from "../apps/worker/src/lib/read-cache";
 import { parseJobsHtml } from "../apps/worker/src/scraper";
 import { safeReturnTo } from "../apps/web/src/lib/safe-return-to";
+import { requestJson } from "../apps/web/src/lib/server/request-json";
 import {
   classifyTelegramError,
   jobMessage,
@@ -188,6 +189,26 @@ describe("same-origin return path", () => {
     "/jobs%0d%0aLocation:https://evil.example/"
   ])("rejects unsafe return destination: %s", (value) => {
     expect(safeReturnTo(value)).toBe("/dashboard");
+  });
+});
+
+describe("BFF JSON body parsing", () => {
+  test("accepts an empty DELETE stream without a JSON content type", async () => {
+    const request = new Request("https://project-g.example/api/sources/id", {
+      method: "DELETE",
+      body: new Uint8Array()
+    });
+
+    expect(await requestJson(request)).toBeUndefined();
+  });
+
+  test("still requires JSON for a non-empty mutation body", async () => {
+    const request = new Request("https://project-g.example/api/sources/id", {
+      method: "PATCH",
+      body: "not-json"
+    });
+
+    await expect(requestJson(request)).rejects.toThrow("JSON_REQUIRED");
   });
 });
 

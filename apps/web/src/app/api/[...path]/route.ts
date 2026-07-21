@@ -6,12 +6,12 @@ import {
   REFRESH_COOKIE
 } from "@/lib/cookie-names";
 import { safeReturnTo } from "@/lib/safe-return-to";
+import { requestJson } from "@/lib/server/request-json";
 import { requestWorker, type WorkerReply } from "@/lib/server/worker";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const MAX_REQUEST_BYTES = 64 * 1024;
 const SESSION_MAX_AGE = 7 * 24 * 60 * 60;
 const MFA_MAX_AGE = 10 * 60;
 const ALLOWED_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
@@ -22,43 +22,6 @@ type SessionTokens = { accessToken: string; refreshToken: string; expiresAt: num
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-async function requestJson(request: NextRequest): Promise<unknown> {
-  if (!request.body) return undefined;
-  if (!(request.headers.get("content-type") ?? "").toLowerCase().includes("application/json")) {
-    throw new Error("JSON_REQUIRED");
-  }
-
-  const declared = Number(request.headers.get("content-length") ?? 0);
-  if (declared > MAX_REQUEST_BYTES) throw new Error("REQUEST_TOO_LARGE");
-
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let length = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    length += value.byteLength;
-    if (length > MAX_REQUEST_BYTES) {
-      await reader.cancel();
-      throw new Error("REQUEST_TOO_LARGE");
-    }
-    chunks.push(value);
-  }
-  if (length === 0) return undefined;
-
-  const bytes = new Uint8Array(length);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  try {
-    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
-  } catch {
-    throw new Error("INVALID_JSON");
-  }
 }
 
 function sessionFrom(data: unknown): SessionTokens | undefined {
