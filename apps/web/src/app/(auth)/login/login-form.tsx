@@ -4,7 +4,7 @@ import { GENERIC_LOGIN_ERROR } from "@project-g/shared";
 import Script from "next/script";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Notice } from "@/components/ui";
+import { Button, Notice } from "@/components/ui";
 import { api } from "@/lib/api";
 import { loginResultSchema } from "@/lib/contracts";
 
@@ -36,6 +36,7 @@ export function LoginForm({ siteKey }: { siteKey: string }) {
   const [turnstileToken, setTurnstileToken] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [securityUnavailable, setSecurityUnavailable] = useState(false);
 
   useEffect(() => {
     if (!scriptReady || !siteKey || !container.current || !window.turnstile) return;
@@ -43,9 +44,17 @@ export function LoginForm({ siteKey }: { siteKey: string }) {
       sitekey: siteKey,
       action: "login",
       theme: "light",
-      callback: setTurnstileToken,
+      callback: (token) => {
+        setTurnstileToken(token);
+        setSecurityUnavailable(false);
+        setError((current) => (current.startsWith("Security check") ? "" : current));
+      },
       "expired-callback": () => setTurnstileToken(""),
-      "error-callback": () => setTurnstileToken("")
+      "error-callback": () => {
+        setTurnstileToken("");
+        setSecurityUnavailable(true);
+        setError("Security check unavailable. Reload and try again.");
+      }
     });
     widgetId.current = id;
     return () => {
@@ -59,6 +68,10 @@ export function LoginForm({ siteKey }: { siteKey: string }) {
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (securityUnavailable) {
+      setError("Security check unavailable. Reload and try again.");
+      return;
+    }
     if (!turnstileToken) {
       setError("Complete security check");
       return;
@@ -96,9 +109,9 @@ export function LoginForm({ siteKey }: { siteKey: string }) {
   }
 
   return (
-    <section className="auth-card" aria-labelledby="login-title">
-      <div className="auth-heading">
-        <p className="eyebrow">Private administration</p>
+    <section className="auth-box page-anim" aria-labelledby="login-title">
+      <div className="auth-head">
+        <p className="microlabel on-accent">Private administration</p>
         <h1 id="login-title">Welcome back</h1>
         <p>Sign in to monitor jobs and Telegram delivery.</p>
       </div>
@@ -114,6 +127,9 @@ export function LoginForm({ siteKey }: { siteKey: string }) {
             inputMode="email"
             maxLength={320}
             required
+            disabled={busy}
+            aria-invalid={error === GENERIC_LOGIN_ERROR ? true : undefined}
+            aria-describedby={error ? "login-error" : undefined}
           />
         </div>
         <div className="field">
@@ -126,6 +142,9 @@ export function LoginForm({ siteKey }: { siteKey: string }) {
             autoComplete="current-password"
             maxLength={1024}
             required
+            disabled={busy}
+            aria-invalid={error === GENERIC_LOGIN_ERROR ? true : undefined}
+            aria-describedby={error ? "login-error" : undefined}
           />
         </div>
         <div className="turnstile-wrap">
@@ -141,17 +160,34 @@ export function LoginForm({ siteKey }: { siteKey: string }) {
             <Notice>Security check is not configured.</Notice>
           )}
         </div>
-        {error ? <Notice>{error}</Notice> : null}
-        <button className="button button-primary auth-submit" type="submit" disabled={busy || !siteKey}>
-          {busy ? "Signing in..." : "Sign in"}
-        </button>
+        {error ? (
+          <div id="login-error">
+            <Notice>{error}</Notice>
+          </div>
+        ) : null}
+        <Button
+          type="submit"
+          variant="primary"
+          className="btn-lg btn-block"
+          busy={busy}
+          busyLabel="Signing in…"
+          disabled={busy || !siteKey || securityUnavailable}
+        >
+          Sign in
+        </Button>
       </form>
       {siteKey ? (
         <Script
           src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"
           strategy="afterInteractive"
-          onReady={() => setScriptReady(true)}
-          onError={() => setError("Security check unavailable")}
+          onReady={() => {
+            setSecurityUnavailable(false);
+            setScriptReady(true);
+          }}
+          onError={() => {
+            setSecurityUnavailable(true);
+            setError("Security check unavailable. Reload and try again.");
+          }}
         />
       ) : null}
     </section>

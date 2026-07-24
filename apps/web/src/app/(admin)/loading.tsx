@@ -1,5 +1,5 @@
-import { LoadingState } from "@/components/ui";
+import { SkeletonRows } from "@/components/ui";
 
 export default function AdminLoading() {
-  return <LoadingState label="Opening workspace" />;
+  return <SkeletonRows rows={4} height={70} />;
 }

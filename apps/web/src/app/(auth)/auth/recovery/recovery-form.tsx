@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { LoadingState, Notice } from "@/components/ui";
+import { Button, LoadingState, Notice } from "@/components/ui";
 import { api } from "@/lib/api";
 
 export function RecoveryForm({ tokenHash, validType }: { tokenHash: string; validType: boolean }) {
@@ -60,15 +60,23 @@ export function RecoveryForm({ tokenHash, validType }: { tokenHash: string; vali
     }
   }
 
-  if (!verified && !error) return <LoadingState label="Verifying recovery link" />;
+  if (!verified && !error) {
+    return (
+      <div className="auth-box">
+        <LoadingState label="Verifying recovery link" />
+      </div>
+    );
+  }
 
   if (complete) {
     return (
-      <section className="auth-card auth-result" aria-labelledby="recovery-complete">
-        <p className="eyebrow">Password updated</p>
-        <h1 id="recovery-complete">Recovery complete</h1>
-        <p>All existing sessions were signed out. Sign in with new password.</p>
-        <Link className="button button-primary" href="/login">
+      <section className="auth-box page-anim" aria-labelledby="recovery-complete">
+        <div className="auth-head">
+          <p className="microlabel on-accent">Password updated</p>
+          <h1 id="recovery-complete">Recovery complete</h1>
+          <p>All existing sessions were signed out. Sign in with the new password.</p>
+        </div>
+        <Link className="btn btn-primary btn-lg btn-block" href="/login" prefetch={false}>
           Return to sign in
         </Link>
       </section>
@@ -77,21 +85,25 @@ export function RecoveryForm({ tokenHash, validType }: { tokenHash: string; vali
 
   if (!verified) {
     return (
-      <section className="auth-card auth-result" aria-labelledby="recovery-invalid">
-        <p className="eyebrow">Recovery unavailable</p>
-        <h1 id="recovery-invalid">Link cannot be used</h1>
+      <section className="auth-box page-anim" aria-labelledby="recovery-invalid">
+        <div className="auth-head">
+          <p className="microlabel">Recovery unavailable</p>
+          <h1 id="recovery-invalid">Link cannot be used</h1>
+        </div>
         <Notice>{error}</Notice>
-        <Link className="button button-secondary" href="/login">
-          Return to sign in
-        </Link>
+        <div className="auth-alt">
+          <Link className="btn btn-secondary btn-block" href="/login" prefetch={false}>
+            Return to sign in
+          </Link>
+        </div>
       </section>
     );
   }
 
   return (
-    <section className="auth-card" aria-labelledby="recovery-title">
-      <div className="auth-heading">
-        <p className="eyebrow">Account recovery</p>
+    <section className="auth-box page-anim" aria-labelledby="recovery-title">
+      <div className="auth-head">
+        <p className="microlabel on-accent">Account recovery</p>
         <h1 id="recovery-title">Set new password</h1>
         <p>Use at least 12 characters. Existing sessions will be signed out.</p>
       </div>
@@ -107,6 +119,9 @@ export function RecoveryForm({ tokenHash, validType }: { tokenHash: string; vali
             minLength={12}
             maxLength={128}
             required
+            disabled={busy}
+            aria-invalid={error ? true : undefined}
+            aria-describedby={error ? "recovery-password-error" : undefined}
           />
         </div>
         <div className="field">
@@ -120,12 +135,19 @@ export function RecoveryForm({ tokenHash, validType }: { tokenHash: string; vali
             minLength={12}
             maxLength={128}
             required
+            disabled={busy}
+            aria-invalid={error ? true : undefined}
+            aria-describedby={error ? "recovery-password-error" : undefined}
           />
         </div>
-        {error ? <Notice>{error}</Notice> : null}
-        <button className="button button-primary auth-submit" type="submit" disabled={busy}>
-          {busy ? "Updating..." : "Update password"}
-        </button>
+        {error ? (
+          <div id="recovery-password-error">
+            <Notice>{error}</Notice>
+          </div>
+        ) : null}
+        <Button type="submit" variant="primary" className="btn-lg btn-block" busy={busy} busyLabel="Updating…">
+          Update password
+        </Button>
       </form>
     </section>
   );

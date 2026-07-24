@@ -1,94 +1,325 @@
 "use client";
 
-import { sourceUrlSchema } from "@project-g/shared";
+import { sourceUrlSchema, SOURCE_HOST } from "@project-g/shared";
 import {
   useEffect,
+  useId,
   useRef,
   useState,
   type FormEvent,
   type PointerEvent as ReactPointerEvent
 } from "react";
-import { ConfirmDialog, EmptyState, ErrorState, Notice, StatusPill } from "@/components/ui";
+import {
+  Button,
+  ConfirmDialog,
+  Dialog,
+  EmptyState,
+  ErrorState,
+  IconGrip,
+  IconMore,
+  IconPlus,
+  IconSources,
+  Notice,
+  Pill
+} from "@/components/ui";
 import { api } from "@/lib/api";
 import { sourcesSchema, type Source } from "@/lib/contracts";
 import { compactUrl, formatRelative } from "@/lib/format";
 
-type Editor = { source?: Source };
+type Phase = "idle" | "testing" | "saving";
 
-function SourceEditor({
-  editor,
-  busy,
-  error,
-  onClose,
-  onSubmit
+/* ---------------- inline add (intro panel) ---------------- */
+
+function InlineAdd({
+  busyGlobal,
+  onAdded,
+  beginMutation,
+  endMutation
 }: {
-  editor: Editor;
-  busy: boolean;
-  error: string;
-  onClose: () => void;
-  onSubmit: (value: string) => void;
+  busyGlobal: boolean;
+  onAdded: () => Promise<void>;
+  beginMutation: (key: string) => boolean;
+  endMutation: () => void;
 }) {
-  const ref = useRef<HTMLDialogElement>(null);
-  const [value, setValue] = useState(editor.source?.url ?? "");
+  const id = useId();
+  const [value, setValue] = useState("");
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const busy = phase !== "idle";
 
-  useEffect(() => {
-    const dialog = ref.current;
-    if (!dialog) return;
-    dialog.showModal();
-    return () => dialog.close();
-  }, []);
-
-  function submit(event: FormEvent<HTMLFormElement>) {
+  async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    onSubmit(value);
+    setError("");
+    setSuccess("");
+
+    const parsed = sourceUrlSchema.safeParse(value);
+    if (!parsed.success) {
+      setError(parsed.error.issues[0]?.message ?? "Invalid source URL");
+      return;
+    }
+    if (!beginMutation("add")) return;
+
+    try {
+      setPhase("testing");
+      await api("/api/sources/test", {
+        method: "POST",
+        body: JSON.stringify({ url: parsed.data })
+      });
+      setPhase("saving");
+      await api("/api/sources", {
+        method: "POST",
+        body: JSON.stringify({ url: parsed.data })
+      });
+      setValue("");
+      setSuccess("Source added. New sources start Off.");
+      await onAdded();
+    } catch (mutationError) {
+      setError(mutationError instanceof Error ? mutationError.message : "Source validation failed");
+    } finally {
+      setPhase("idle");
+      endMutation();
+    }
   }
 
   return (
-    <dialog
-      className="dialog"
-      ref={ref}
-      onCancel={(event) => {
-        event.preventDefault();
-        if (!busy) onClose();
-      }}
-      onClick={(event) => {
-        if (event.target === event.currentTarget && !busy) onClose();
-      }}
-    >
+    <form className="add-form" onSubmit={submit}>
+      <div className="field">
+        <label htmlFor={`${id}-url`}>Add a GigClickers URL</label>
+        <input
+          className="input mono"
+          id={`${id}-url`}
+          type="url"
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          placeholder={`https://${SOURCE_HOST}/…`}
+          autoComplete="url"
+          spellCheck={false}
+          maxLength={2048}
+          required
+          disabled={busy || busyGlobal}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={`${id}-help`}
+        />
+        <p className="field-help" id={`${id}-help`}>
+          HTTPS on {SOURCE_HOST} only. Live-tested before saving; new sources start Off.
+        </p>
+      </div>
+
+      {phase === "testing" ? (
+        <p className="notice notice-info" role="status">
+          <span className="spin" aria-hidden="true" />
+          <span>Testing source — fetching live page…</span>
+        </p>
+      ) : null}
+      {success && phase === "idle" ? <Notice tone="success">{success}</Notice> : null}
+      {error ? <Notice>{error}</Notice> : null}
+
+      <Button
+        type="submit"
+        variant="primary"
+        busy={busy}
+        busyLabel={phase === "testing" ? "Validating…" : "Saving…"}
+        disabled={busyGlobal}
+      >
+        <IconPlus size={14} /> Test & add
+      </Button>
+    </form>
+  );
+}
+
+/* ---------------- edit dialog ---------------- */
+
+function EditDialog({
+  source,
+  onClose,
+  onSaved,
+  busyGlobal,
+  beginMutation,
+  endMutation
+}: {
+  source: Source;
+  onClose: () => void;
+  onSaved: () => Promise<void>;
+  busyGlobal: boolean;
+  beginMutation: (key: string) => boolean;
+  endMutation: () => void;
+}) {
+  const id = useId();
+  const [value, setValue] = useState(source.url);
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [error, setError] = useState("");
+  const busy = phase !== "idle";
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+
+    const parsed = sourceUrlSchema.safeParse(value);
+    if (!parsed.success) {
+      setError(parsed.error.issues[0]?.message ?? "Invalid source URL");
+      return;
+    }
+    if (parsed.data === source.normalizedUrl) {
+      onClose();
+      return;
+    }
+    if (!beginMutation(`edit:${source.id}`)) return;
+
+    try {
+      setPhase("testing");
+      await api("/api/sources/test", {
+        method: "POST",
+        body: JSON.stringify({ url: parsed.data })
+      });
+      setPhase("saving");
+      await api(`/api/sources/${encodeURIComponent(source.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ url: parsed.data })
+      });
+      await onSaved();
+    } catch (mutationError) {
+      setError(mutationError instanceof Error ? mutationError.message : "Source validation failed");
+    } finally {
+      setPhase("idle");
+      endMutation();
+    }
+  }
+
+  return (
+    <Dialog open onClose={() => !busy && !busyGlobal && onClose()} labelledBy={`${id}-title`}>
       <form className="dialog-panel" onSubmit={submit}>
-        <div>
-          <p className="eyebrow">Source URL</p>
-          <h2>{editor.source ? "Edit source" : "Add source"}</h2>
+        <div className="dialog-head">
+          <p className="microlabel">Source URL</p>
+          <h2 id={`${id}-title`}>Edit source</h2>
         </div>
         <div className="field">
-          <label htmlFor="source-url">GigClickers URL</label>
+          <label htmlFor={`${id}-url`}>GigClickers URL</label>
           <input
-            className="input"
-            id="source-url"
+            className="input mono"
+            id={`${id}-url`}
             type="url"
             value={value}
             onChange={(event) => setValue(event.target.value)}
-            placeholder="https://bot.gigclickers.com/..."
+            placeholder={`https://${SOURCE_HOST}/…`}
             autoComplete="url"
+            spellCheck={false}
             maxLength={2048}
             required
             autoFocus
+            disabled={busy || busyGlobal}
+            aria-invalid={error ? true : undefined}
+            aria-describedby={`${id}-help`}
           />
-          <p className="field-help">API validates source structure. New sources stay Off.</p>
+          <p className="field-help" id={`${id}-help`}>
+            Must be HTTPS on {SOURCE_HOST}. Changing the URL restarts its baseline.
+          </p>
         </div>
+
+        {phase === "testing" ? (
+          <p className="notice notice-info" role="status">
+            <span className="spin" aria-hidden="true" />
+            <span>Testing source — fetching live page…</span>
+          </p>
+        ) : null}
         {error ? <Notice>{error}</Notice> : null}
+
         <div className="dialog-actions">
-          <button className="button button-quiet" type="button" disabled={busy} onClick={onClose}>
+          <Button variant="quiet" disabled={busy || busyGlobal} onClick={onClose}>
             Cancel
-          </button>
-          <button className="button button-primary" type="submit" disabled={busy}>
-            {busy ? "Validating..." : editor.source ? "Save source" : "Add source"}
-          </button>
+          </Button>
+          <Button
+            type="submit"
+            variant="primary"
+            busy={busy}
+            busyLabel={phase === "testing" ? "Validating…" : "Saving…"}
+            disabled={busyGlobal}
+          >
+            Test & save
+          </Button>
         </div>
       </form>
-    </dialog>
+    </Dialog>
   );
 }
+
+/* ---------------- row menu ---------------- */
+
+function RowMenu({
+  label,
+  onEdit,
+  onDelete,
+  disabled
+}: {
+  label: string;
+  onEdit: () => void;
+  onDelete: () => void;
+  disabled: boolean;
+}) {
+  const ref = useRef<HTMLDetailsElement>(null);
+
+  useEffect(() => {
+    function onDocClick(event: MouseEvent) {
+      if (ref.current?.open && !ref.current.contains(event.target as Node)) ref.current.open = false;
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key !== "Escape" || !ref.current?.open) return;
+      ref.current.open = false;
+      ref.current.querySelector<HTMLElement>("summary")?.focus();
+    }
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (disabled && ref.current) ref.current.open = false;
+  }, [disabled]);
+
+  return (
+    <details className="menu" ref={ref}>
+      <summary
+        className="icon-btn"
+        aria-label={label}
+        aria-disabled={disabled || undefined}
+        onClick={(event) => {
+          if (disabled) event.preventDefault();
+        }}
+        onKeyDown={(event) => {
+          if (disabled && (event.key === "Enter" || event.key === " ")) event.preventDefault();
+        }}
+      >
+        <IconMore size={16} />
+      </summary>
+      <div className="menu-list" aria-label={label}>
+        <button
+          type="button"
+          onClick={() => {
+            if (ref.current) ref.current.open = false;
+            onEdit();
+          }}
+        >
+          Edit URL
+        </button>
+        <button
+          type="button"
+          className="danger-text"
+          onClick={() => {
+            if (ref.current) ref.current.open = false;
+            onDelete();
+          }}
+        >
+          Delete…
+        </button>
+      </div>
+    </details>
+  );
+}
+
+/* ---------------- page ---------------- */
 
 function reorder(items: Source[], sourceId: string, targetId: string): Source[] {
   const from = items.findIndex((item) => item.id === sourceId);
@@ -111,12 +342,13 @@ export function SourcesClient({
   const [sources, setSources] = useState(initialSources);
   const [referenceNow, setReferenceNow] = useState(initialNow);
   const [error, setError] = useState("");
-  const [editorError, setEditorError] = useState("");
-  const [editor, setEditor] = useState<Editor | null>(null);
+  const [editing, setEditing] = useState<Source | null>(null);
   const [deleting, setDeleting] = useState<Source>();
   const [busy, setBusy] = useState("");
   const [dragging, setDragging] = useState<string>();
+  const [reorderNote, setReorderNote] = useState("");
   const sourcesRef = useRef(initialSources);
+  const busyRef = useRef(false);
   const dragId = useRef<string | null>(null);
   const dragOriginal = useRef<Source[] | null>(null);
   const dragOverId = useRef<string | null>(null);
@@ -124,6 +356,18 @@ export function SourcesClient({
   useEffect(() => {
     sourcesRef.current = sources;
   }, [sources]);
+
+  function beginMutation(key: string): boolean {
+    if (busyRef.current || dragId.current) return false;
+    busyRef.current = true;
+    setBusy(key);
+    return true;
+  }
+
+  function endMutation() {
+    busyRef.current = false;
+    setBusy("");
+  }
 
   async function load() {
     try {
@@ -138,49 +382,10 @@ export function SourcesClient({
     }
   }
 
-  async function saveSource(rawUrl: string) {
-    const parsed = sourceUrlSchema.safeParse(rawUrl);
-    if (!parsed.success) {
-      setEditorError(parsed.error.issues[0]?.message ?? "Invalid source URL");
-      return;
-    }
-    const current = editor?.source;
-    if (current && parsed.data === current.normalizedUrl) {
-      setEditor(null);
-      return;
-    }
-
-    setBusy("editor");
-    setEditorError("");
-    try {
-      await api("/api/sources/test", {
-        method: "POST",
-        body: JSON.stringify({ url: parsed.data })
-      });
-      if (current) {
-        await api(`/api/sources/${encodeURIComponent(current.id)}`, {
-          method: "PATCH",
-          body: JSON.stringify({ url: parsed.data })
-        });
-      } else {
-        await api("/api/sources", {
-          method: "POST",
-          body: JSON.stringify({ url: parsed.data })
-        });
-      }
-      setEditor(null);
-      await load();
-    } catch (mutationError) {
-      setEditorError(mutationError instanceof Error ? mutationError.message : "Source validation failed");
-    } finally {
-      setBusy("");
-    }
-  }
-
   async function toggle(source: Source) {
+    if (!beginMutation(source.id)) return;
     const previous = sources;
     const enabled = !source.enabled;
-    setBusy(source.id);
     setError("");
     setSources((items) => items.map((item) => (item.id === source.id ? { ...item, enabled } : item)));
     try {
@@ -192,13 +397,13 @@ export function SourcesClient({
       setSources(previous);
       setError(mutationError instanceof Error ? mutationError.message : "Source update failed");
     } finally {
-      setBusy("");
+      endMutation();
     }
   }
 
   async function removeSource() {
     if (!deleting) return;
-    setBusy("delete");
+    if (!beginMutation("delete")) return;
     setError("");
     try {
       await api(`/api/sources/${encodeURIComponent(deleting.id)}`, { method: "DELETE" });
@@ -207,13 +412,17 @@ export function SourcesClient({
     } catch (mutationError) {
       setError(mutationError instanceof Error ? mutationError.message : "Source deletion failed");
     } finally {
-      setBusy("");
+      endMutation();
     }
   }
 
   async function persistOrder(next: Source[], previous: Source[]) {
     if (next.map((item) => item.id).join() === previous.map((item) => item.id).join()) return;
-    setBusy("order");
+    if (!beginMutation("order")) {
+      setSources(previous);
+      sourcesRef.current = previous;
+      return;
+    }
     setError("");
     try {
       await api("/api/sources/order", {
@@ -223,14 +432,15 @@ export function SourcesClient({
     } catch (mutationError) {
       setSources(previous);
       sourcesRef.current = previous;
-      setError(mutationError instanceof Error ? mutationError.message : "Order was not saved; previous order restored.");
+      const detail = mutationError instanceof Error ? mutationError.message : "Order update failed";
+      setError(`${detail} Previous order restored.`);
     } finally {
-      setBusy("");
+      endMutation();
     }
   }
 
   function pointerDown(event: ReactPointerEvent<HTMLButtonElement>, sourceId: string) {
-    if (busy || event.button !== 0) return;
+    if (busyRef.current || event.button !== 0) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     dragId.current = sourceId;
@@ -280,7 +490,7 @@ export function SourcesClient({
   }
 
   function keyboardMove(sourceId: string, direction: -1 | 1) {
-    if (busy) return;
+    if (busyRef.current || dragId.current) return;
     const previous = sourcesRef.current;
     const index = previous.findIndex((item) => item.id === sourceId);
     const target = previous[index + direction];
@@ -288,120 +498,172 @@ export function SourcesClient({
     const next = reorder(previous, sourceId, target.id);
     setSources(next);
     sourcesRef.current = next;
+    setReorderNote(`Source moved to position ${index + 1 + direction} of ${next.length}.`);
     void persistOrder(next, previous);
   }
 
-  if (!sources.length && error) return <ErrorState message={error} retry={() => void load()} />;
+  if (!sources.length && error) {
+    return <ErrorState message={error} retry={() => void load()} />;
+  }
+
+  const activeCount = sources.filter((source) => source.enabled).length;
 
   return (
-    <>
-      <div className="page-heading">
-        <div>
-          <p className="eyebrow">Scrape inputs</p>
-          <h1>Sources</h1>
-          <p>{sources.length} configured. Drag handles or arrow keys change check order.</p>
+    <div className="split">
+      <section className="split-intro" aria-labelledby="sources-title">
+        <div className="intro-panel">
+          <div>
+            <p className="microlabel" style={{ marginBottom: 9 }}>
+              Scrape inputs
+            </p>
+            <h1 id="sources-title">Sources</h1>
+            <p className="lede" style={{ marginTop: 7 }}>
+              Checked top to bottom. Drag the handle or press the arrow keys on it to reorder.
+            </p>
+          </div>
+          <div className="intro-stat">
+            <strong>{sources.length}</strong> configured
+            <span aria-hidden="true">·</span>
+            <strong>{activeCount}</strong> on
+          </div>
+          <InlineAdd
+            busyGlobal={Boolean(busy) || Boolean(dragging)}
+            onAdded={load}
+            beginMutation={beginMutation}
+            endMutation={endMutation}
+          />
         </div>
-        <button
-          className="button button-primary"
-          type="button"
-          onClick={() => {
-            setEditorError("");
-            setEditor({});
-          }}
-        >
-          Add source
-        </button>
-      </div>
+      </section>
 
-      {error ? <Notice>{error}</Notice> : null}
+      <section aria-label="Sources in check order">
+        {error && !deleting ? (
+          <div style={{ marginBottom: 14 }}>
+            <Notice>{error}</Notice>
+          </div>
+        ) : null}
+        <p className="sr-only" role="status" aria-live="polite">
+          {reorderNote}
+        </p>
 
-      {sources.length ? (
-        <div className="source-list" role="list" aria-label="Sources in check order">
-          {sources.map((source, index) => (
-            <article
-              className={`source-row${dragging === source.id ? " source-dragging" : ""}`}
-              role="listitem"
-              data-source-id={source.id}
-              key={source.id}
-            >
-              <button
-                className="drag-handle"
-                type="button"
-                aria-label={`Move source ${index + 1}. Use arrow keys or drag.`}
-                aria-pressed={dragging === source.id}
-                disabled={Boolean(busy)}
-                onPointerDown={(event) => pointerDown(event, source.id)}
-                onPointerMove={pointerMove}
-                onPointerUp={pointerUp}
-                onPointerCancel={pointerCancel}
-                onKeyDown={(event) => {
-                  if (event.key === "ArrowUp" || event.key === "ArrowDown") {
-                    event.preventDefault();
-                    keyboardMove(source.id, event.key === "ArrowUp" ? -1 : 1);
-                  }
-                }}
-              >
-                <span aria-hidden="true">=</span>
-              </button>
-              <span className="source-number mono">{String(index + 1).padStart(2, "0")}</span>
-              <div className="source-main">
-                <a href={source.url} target="_blank" rel="noreferrer" title={source.url}>
-                  {compactUrl(source.url)}
-                </a>
-                <div className="source-meta">
-                  <span>Checked {formatRelative(source.lastCheckedAt, referenceNow)}</span>
-                  {source.lastFailedAt ? (
-                    <span className="failure-copy" title={source.lastError ?? undefined}>
-                      Failed {formatRelative(source.lastFailedAt, referenceNow)} ({source.failureCount})
-                    </span>
-                  ) : (
-                    <span>No failures</span>
-                  )}
-                </div>
-              </div>
-              <StatusPill tone={source.enabled ? "good" : "neutral"}>{source.enabled ? "On" : "Off"}</StatusPill>
-              <label className="source-switch">
-                <span className="sr-only">{source.enabled ? "Turn source off" : "Turn source on"}</span>
-                <input
-                  type="checkbox"
-                  role="switch"
-                  checked={source.enabled}
-                  disabled={Boolean(busy)}
-                  onChange={() => void toggle(source)}
-                />
-              </label>
-              <details className="source-menu">
-                <summary aria-label={`Actions for source ${index + 1}`}>More</summary>
-                <div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setEditorError("");
-                      setEditor({ source });
-                    }}
+        {sources.length ? (
+          <div className="dlist source-list">
+            <ol aria-label="Sources in check order">
+              {sources.map((source, index) => (
+                <li key={source.id} style={{ "--i": Math.min(index, 12) } as React.CSSProperties}>
+                  <article
+                    className="source-row"
+                    data-source-id={source.id}
+                    data-dragging={dragging === source.id || undefined}
                   >
-                    Edit
-                  </button>
-                  <button type="button" className="danger-text" onClick={() => setDeleting(source)}>
-                    Delete
-                  </button>
-                </div>
-              </details>
-            </article>
-          ))}
-        </div>
-      ) : (
-        <EmptyState title="No sources">Add a valid GigClickers URL. New source starts Off.</EmptyState>
-      )}
+                    <button
+                      className="drag-handle"
+                      type="button"
+                      aria-label={`Reorder source ${index + 1} of ${sources.length}: ${compactUrl(source.url)}. Press arrow up or arrow down to move, or drag.`}
+                      aria-pressed={dragging === source.id}
+                      disabled={Boolean(busy)}
+                      onPointerDown={(event) => pointerDown(event, source.id)}
+                      onPointerMove={pointerMove}
+                      onPointerUp={pointerUp}
+                      onPointerCancel={pointerCancel}
+                      onKeyDown={(event) => {
+                        if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+                          event.preventDefault();
+                          keyboardMove(source.id, event.key === "ArrowUp" ? -1 : 1);
+                        }
+                      }}
+                    >
+                      <IconGrip size={17} />
+                    </button>
+                    <div className="source-main">
+                      <a
+                        className="source-url"
+                        href={source.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        title={source.url}
+                      >
+                        {compactUrl(source.url)}
+                      </a>
+                      <div className="source-meta">
+                        <span className="pos num" aria-hidden="true">
+                          {String(index + 1).padStart(2, "0")}
+                        </span>
+                        <span>
+                          {source.lastCheckedAt
+                            ? `Checked ${formatRelative(source.lastCheckedAt, referenceNow)}`
+                            : "Never checked"}
+                        </span>
+                        {source.lastFailedAt && source.failureCount > 0 ? (
+                          <span className="fail" title={source.lastError ?? undefined}>
+                            ⚠ {source.failureCount} consecutive failure
+                            {source.failureCount === 1 ? "" : "s"} · last{" "}
+                            {formatRelative(source.lastFailedAt, referenceNow)}
+                          </span>
+                        ) : source.lastFailedAt ? (
+                          <span>Recovered · failed {formatRelative(source.lastFailedAt, referenceNow)}</span>
+                        ) : (
+                          <span>No failures</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="source-side">
+                      <div className="source-flags">
+                        {!source.baselineCompleted ? (
+                          <Pill tone="accent" hollow>
+                            Baseline pending
+                          </Pill>
+                        ) : null}
+                        <Pill tone={source.enabled ? "ok" : "neutral"} hollow={!source.enabled}>
+                          {source.enabled ? "On" : "Off"}
+                        </Pill>
+                      </div>
+                      <label className="switch-hit">
+                        <span className="sr-only">
+                          {source.enabled ? `Turn source ${index + 1} off` : `Turn source ${index + 1} on`}
+                        </span>
+                        <input
+                          type="checkbox"
+                          role="switch"
+                          className="switch"
+                          checked={source.enabled}
+                          disabled={Boolean(busy) || Boolean(dragging)}
+                          onChange={() => void toggle(source)}
+                        />
+                      </label>
+                      <RowMenu
+                        label={`Actions for source ${index + 1}`}
+                        disabled={Boolean(busy) || Boolean(dragging)}
+                        onEdit={() => setEditing(source)}
+                        onDelete={() => {
+                          setError("");
+                          setDeleting(source);
+                        }}
+                      />
+                    </div>
+                  </article>
+                </li>
+              ))}
+            </ol>
+          </div>
+        ) : (
+          <EmptyState title="No sources" icon={<IconSources size={18} />}>
+            Add a valid GigClickers URL. New sources start Off.
+          </EmptyState>
+        )}
+      </section>
 
-      {editor ? (
-        <SourceEditor
-          key={editor.source?.id ?? "new"}
-          editor={editor}
-          busy={busy === "editor"}
-          error={editorError}
-          onClose={() => setEditor(null)}
-          onSubmit={(value) => void saveSource(value)}
+      {editing ? (
+        <EditDialog
+          key={editing.id}
+          source={editing}
+          onClose={() => setEditing(null)}
+          busyGlobal={Boolean(busy)}
+          beginMutation={beginMutation}
+          endMutation={endMutation}
+          onSaved={async () => {
+            setEditing(null);
+            await load();
+          }}
         />
       ) : null}
 
@@ -411,11 +673,18 @@ export function SourcesClient({
         destructive
         title="Delete source?"
         confirmLabel="Delete source"
-        onClose={() => setDeleting(undefined)}
+        onClose={() => {
+          setDeleting(undefined);
+          setError("");
+        }}
         onConfirm={() => void removeSource()}
       >
+        <p className="truncate mono" style={{ fontSize: 12 }} title={deleting?.url}>
+          {deleting ? compactUrl(deleting.url) : ""}
+        </p>
         <p>Source is removed from future checks. Existing jobs and full history are kept.</p>
+        {error ? <Notice>{error}</Notice> : null}
       </ConfirmDialog>
-    </>
+    </div>
   );
 }

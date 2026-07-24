@@ -3,6 +3,7 @@ import { requestAdminData } from "@/lib/server/require-admin";
 import { JobsClient } from "./jobs-client";
 
 export default async function JobsPage() {
-  const result = jobsSchema.parse((await requestAdminData("jobs", "/jobs")).data);
-  return <JobsClient initialJobs={result.jobs} initialCursor={result.nextCursor} />;
+  const reply = await requestAdminData("jobs", "/jobs");
+  const result = jobsSchema.parse(reply.data);
+  return <JobsClient initialJobs={result.jobs} initialCursor={result.nextCursor} initialNow={reply.receivedAt} />;
 }

@@ -1,13 +1,30 @@
 "use client";
 
 import { useDeferredValue, useEffect, useState } from "react";
-import { EmptyState, ErrorState, JobList, LoadingState, Notice } from "@/components/ui";
+import {
+  Button,
+  EmptyState,
+  ErrorState,
+  IconInbox,
+  IconSearch,
+  JobList,
+  LoadingState,
+  Notice
+} from "@/components/ui";
 import { api } from "@/lib/api";
 import { jobsSchema, type Job } from "@/lib/contracts";
 
 type LoadedRequest = { query: string; retry: number };
 
-export function JobsClient({ initialJobs, initialCursor }: { initialJobs: Job[]; initialCursor: string | null }) {
+export function JobsClient({
+  initialJobs,
+  initialCursor,
+  initialNow
+}: {
+  initialJobs: Job[];
+  initialCursor: string | null;
+  initialNow: number;
+}) {
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query.trim());
   const [jobs, setJobs] = useState(initialJobs);
@@ -16,6 +33,7 @@ export function JobsClient({ initialJobs, initialCursor }: { initialJobs: Job[];
   const [retry, setRetry] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
+  const [now, setNow] = useState(initialNow);
   const normalizedQuery = query.trim();
 
   async function loadMore() {
@@ -28,6 +46,7 @@ export function JobsClient({ initialJobs, initialCursor }: { initialJobs: Job[];
       const result = jobsSchema.parse(await api(`/api/jobs?${params.toString()}`));
       setJobs((items) => [...items, ...result.jobs]);
       setCursor(result.nextCursor);
+      setNow(Date.now());
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Jobs request failed");
     } finally {
@@ -52,6 +71,7 @@ export function JobsClient({ initialJobs, initialCursor }: { initialJobs: Job[];
         setCursor(result.nextCursor);
         setError("");
         setLoadedRequest(request);
+        setNow(Date.now());
       })
       .catch((loadError: unknown) => {
         if (controller.signal.aborted || (loadError instanceof DOMException && loadError.name === "AbortError")) {
@@ -70,14 +90,19 @@ export function JobsClient({ initialJobs, initialCursor }: { initialJobs: Job[];
 
   return (
     <>
-      <div className="page-heading jobs-heading">
+      <div className="jobs-top">
         <div>
-          <p className="eyebrow">Stored history</p>
+          <p className="microlabel" style={{ marginBottom: 8 }}>
+            Stored history
+          </p>
           <h1>Jobs</h1>
-          <p>Newest first. First-seen timestamps use Dhaka time.</p>
         </div>
-        <div className="job-search field">
-          <label htmlFor="job-search">Search job ID or name</label>
+        <span className="meta">Newest first · deduplicated · first seen in Dhaka time</span>
+      </div>
+
+      <div className="jobs-search">
+        <div className="search-bar">
+          <IconSearch size={16} />
           <input
             className="input"
             id="job-search"
@@ -93,37 +118,44 @@ export function JobsClient({ initialJobs, initialCursor }: { initialJobs: Job[];
                 setLoadedRequest({ query: "", retry });
               }
             }}
-            placeholder="ID or job name"
+            placeholder="Search job ID or name…"
+            aria-label="Search job ID or name"
             maxLength={120}
           />
+          <span className="kbd-hint" aria-hidden="true">
+            ID · Name
+          </span>
         </div>
       </div>
 
-      {error && jobs.length ? <Notice>{error}</Notice> : null}
+      {error && jobs.length ? (
+        <div style={{ marginBottom: 14 }}>
+          <Notice>{error}</Notice>
+        </div>
+      ) : null}
+
       {loading && !jobs.length ? (
         <LoadingState label={deferredQuery ? "Searching jobs" : "Loading job history"} />
       ) : error && !jobs.length ? (
         <ErrorState message={error} retry={() => setRetry((value) => value + 1)} />
       ) : jobs.length ? (
         <>
-          <JobList jobs={jobs} />
-          <div className="load-more">
+          <JobList jobs={jobs} now={now} />
+          <div className="list-foot">
             {cursor ? (
-              <button
-                className="button button-secondary"
-                type="button"
-                disabled={loadingMore}
-                onClick={() => void loadMore()}
-              >
-                {loadingMore ? "Loading..." : "Load more"}
-              </button>
+              <Button variant="secondary" busy={loadingMore} busyLabel="Loading…" onClick={() => void loadMore()}>
+                Load more
+              </Button>
             ) : (
-              <span className="muted">End of history</span>
+              <span className="end-mark">End of history</span>
             )}
           </div>
         </>
       ) : (
-        <EmptyState title={deferredQuery ? "No matching jobs" : "No job history"}>
+        <EmptyState
+          title={deferredQuery ? "No matching jobs" : "No job history"}
+          icon={deferredQuery ? <IconSearch size={18} /> : <IconInbox size={18} />}
+        >
           {deferredQuery ? "Try another ID or name." : "Stored non-baseline jobs appear here."}
         </EmptyState>
       )}

@@ -1,20 +1,123 @@
 "use client";
 
 import { telegramTokenSchema } from "@project-g/shared";
-import { useState, type FormEvent } from "react";
-import { ConfirmDialog, EmptyState, Notice, StatusPill } from "@/components/ui";
+import { useId, useState, type FormEvent } from "react";
+import {
+  Button,
+  ConfirmDialog,
+  Dialog,
+  EmptyState,
+  IconBot,
+  Notice,
+  Pill
+} from "@/components/ui";
 import { api } from "@/lib/api";
 import { botSchema, subscribersSchema, type Bot, type Subscriber } from "@/lib/contracts";
+import { initialsOf } from "@/lib/format";
 
-type Confirmation = { kind: "disconnect" } | { kind: "replace"; token: string };
+type Confirmation = { kind: "disconnect" };
 
-function subscriberLabel(status: Subscriber["status"]) {
+/* Repo mapping: active → "On", blocked → "Unavailable", rest capitalized. */
+function subscriberLabel(status: Subscriber["status"]): string {
   if (status === "active") return "On";
   if (status === "blocked") return "Unavailable";
   return `${status.charAt(0).toUpperCase()}${status.slice(1)}`;
 }
 
-export function BotClient({ initialBot, initialSubscribers }: { initialBot: Bot; initialSubscribers: Subscriber[] }) {
+function subscriberTone(status: Subscriber["status"]): "ok" | "warn" | "bad" | "neutral" {
+  if (status === "active") return "ok";
+  if (status === "pending") return "warn";
+  if (status === "unavailable" || status === "blocked") return "bad";
+  return "neutral";
+}
+
+/* ---------------- replace-token dialog ---------------- */
+
+function ReplaceTokenDialog({
+  onClose,
+  onDone
+}: {
+  onClose: () => void;
+  onDone: () => Promise<void>;
+}) {
+  const id = useId();
+  const [token, setToken] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!telegramTokenSchema.safeParse({ token: token.trim() }).success) {
+      setError("Enter a valid Telegram bot token.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await api("/api/bot/connect", {
+        method: "POST",
+        body: JSON.stringify({ token: token.trim() })
+      });
+      await onDone();
+    } catch (mutationError) {
+      setError(mutationError instanceof Error ? mutationError.message : "Bot update failed");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open onClose={() => !busy && onClose()} labelledBy={`${id}-title`}>
+      <form className="dialog-panel" onSubmit={submit}>
+        <div className="dialog-head">
+          <p className="microlabel">Connection token</p>
+          <h2 id={`${id}-title`}>Replace bot token?</h2>
+        </div>
+        <div className="dialog-copy">
+          <p>
+            Worker verifies the new token with Telegram before replacing the current connection.
+            Replace only after rotating with BotFather.
+          </p>
+        </div>
+        <div className="field">
+          <label htmlFor={`${id}-token`}>New bot token</label>
+          <input
+            className="input mono"
+            id={`${id}-token`}
+            type="password"
+            value={token}
+            onChange={(event) => setToken(event.target.value)}
+            placeholder="123456789:AA…"
+            autoComplete="off"
+            spellCheck={false}
+            required
+            autoFocus
+            disabled={busy}
+            aria-invalid={error ? true : undefined}
+          />
+        </div>
+        {error ? <Notice>{error}</Notice> : null}
+        <div className="dialog-actions">
+          <Button variant="quiet" disabled={busy} onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" variant="primary" busy={busy} busyLabel="Verifying…">
+            Verify & replace
+          </Button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
+/* ---------------- page ---------------- */
+
+export function BotClient({
+  initialBot,
+  initialSubscribers
+}: {
+  initialBot: Bot;
+  initialSubscribers: Subscriber[];
+}) {
   const [bot, setBot] = useState(initialBot);
   const [subscribers, setSubscribers] = useState(initialSubscribers);
   const [token, setToken] = useState("");
@@ -22,6 +125,7 @@ export function BotClient({ initialBot, initialSubscribers }: { initialBot: Bot;
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState("");
   const [confirmation, setConfirmation] = useState<Confirmation>();
+  const [replacing, setReplacing] = useState(false);
 
   async function load() {
     try {
@@ -61,21 +165,11 @@ export function BotClient({ initialBot, initialSubscribers }: { initialBot: Bot;
     }
   }
 
-  async function runConfirmedAction() {
-    if (!confirmation) return;
-    const action = confirmation;
-    setBusy(action.kind);
+  async function disconnect() {
+    setBusy("disconnect");
     setNotice("");
     try {
-      if (action.kind === "disconnect") {
-        await api("/api/bot/disconnect", { method: "POST", body: "{}" });
-      } else {
-        await api("/api/bot/connect", {
-          method: "POST",
-          body: JSON.stringify({ token: action.token })
-        });
-        setToken("");
-      }
+      await api("/api/bot/disconnect", { method: "POST", body: "{}" });
       setConfirmation(undefined);
       await load();
     } catch (mutationError) {
@@ -122,7 +216,9 @@ export function BotClient({ initialBot, initialSubscribers }: { initialBot: Bot;
     setBusy(subscriber.id);
     setNotice("");
     setSubscribers((items) =>
-      items.map((item) => (item.id === subscriber.id ? { ...item, status: enabled ? "active" : "off" } : item))
+      items.map((item) =>
+        item.id === subscriber.id ? { ...item, status: enabled ? "active" : "off" } : item
+      )
     );
     try {
       await api(`/api/bot/subscribers/${encodeURIComponent(subscriber.id)}`, {
@@ -137,27 +233,24 @@ export function BotClient({ initialBot, initialSubscribers }: { initialBot: Bot;
     }
   }
 
-  return (
-    <>
-      <div className="page-heading">
-        <div>
-          <p className="eyebrow">Telegram delivery</p>
-          <h1>Bot</h1>
-          <p>Connection, notification master switch, and subscriber access.</p>
-        </div>
-      </div>
+  const banner = notice || error;
+  const bannerTone = notice === "Test message queued." ? "success" : "error";
 
-      {notice || error ? (
-        <Notice tone={notice === "Test message queued." ? "success" : "error"}>{notice || error}</Notice>
-      ) : null}
-
-      {!bot.connected ? (
-        <section className="bot-disconnected" aria-labelledby="bot-not-connected">
-          <div>
-            <p className="eyebrow">Connection required</p>
-            <h2 id="bot-not-connected">Bot not connected</h2>
-            <p>Connect Telegram bot token. Token stays server-side and is stored encrypted by Worker.</p>
+  if (!bot.connected) {
+    return (
+      <>
+        {banner ? (
+          <div style={{ marginBottom: 14 }}>
+            <Notice tone={bannerTone}>{banner}</Notice>
           </div>
+        ) : null}
+        <section className="connect-hero" aria-labelledby="bot-not-connected">
+          <p className="microlabel on-accent">Telegram delivery · connection required</p>
+          <h1 id="bot-not-connected">Bot not connected</h1>
+          <p className="copy">
+            Connect a Telegram bot token from BotFather. The token is verified with Telegram, stays
+            server-side, and is stored encrypted by the Worker — it is never shown again in full.
+          </p>
           <form className="token-form" onSubmit={connect}>
             <div className="field">
               <label htmlFor="bot-token">Bot token</label>
@@ -167,159 +260,199 @@ export function BotClient({ initialBot, initialSubscribers }: { initialBot: Bot;
                 type="password"
                 value={token}
                 onChange={(event) => setToken(event.target.value)}
-                placeholder="123456789:AA..."
+                placeholder="123456789:AA…"
                 autoComplete="off"
                 spellCheck={false}
                 required
+                disabled={busy === "connect"}
               />
             </div>
-            <button className="button button-primary" type="submit" disabled={Boolean(busy)}>
-              {busy === "connect" ? "Connecting..." : "Connect"}
-            </button>
+            <Button
+              type="submit"
+              variant="primary"
+              className="btn-lg"
+              busy={busy === "connect"}
+              busyLabel="Connecting…"
+            >
+              Connect bot
+            </Button>
           </form>
         </section>
-      ) : (
-        <>
-          <section className="bot-identity">
-            <div className="identity-main">
-              {bot.identity.avatarUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={bot.identity.avatarUrl} alt="" className="bot-avatar" />
-              ) : (
-                <span className="bot-avatar avatar-fallback" aria-hidden="true">
-                  {bot.identity.displayName.charAt(0).toUpperCase()}
-                </span>
-              )}
-              <div>
-                <span className="identity-status">
-                  <StatusPill tone="good">Connected</StatusPill>
-                </span>
-                <h2>{bot.identity.displayName}</h2>
-                <p>@{bot.identity.username.replace(/^@/, "")}</p>
-              </div>
-            </div>
-            <div className="bot-controls">
-              <label className="switch-row">
-                <span>
-                  <strong>Notifications</strong>
-                  <small>{bot.masterEnabled ? "Master delivery is on" : "Master delivery is off"}</small>
-                </span>
-                <input
-                  type="checkbox"
-                  role="switch"
-                  checked={bot.masterEnabled}
-                  disabled={Boolean(busy)}
-                  onChange={(event) => void setMaster(event.target.checked)}
-                />
-              </label>
-              <button className="button button-secondary" type="button" disabled={Boolean(busy)} onClick={() => void sendTest()}>
-                {busy === "test" ? "Sending..." : "Send Test"}
-              </button>
-            </div>
-          </section>
+      </>
+    );
+  }
 
-          <section className="token-settings" aria-labelledby="token-settings">
-            <div>
-              <h2 id="token-settings">Connection token</h2>
-              <p><span className="mono">{bot.maskedToken}</span> · Replace only after rotating with BotFather.</p>
+  return (
+    <>
+      {banner && !confirmation && !replacing ? (
+        <div style={{ marginBottom: 14 }}>
+          <Notice tone={bannerTone}>{banner}</Notice>
+        </div>
+      ) : null}
+
+      <div className="split">
+        <section className="split-intro" aria-labelledby="bot-page-title">
+          <div className="profile">
+            <div className="profile-context">
+              <p className="microlabel">Connected delivery</p>
+              <h1 id="bot-page-title">Telegram Bot</h1>
             </div>
-            <div className="token-inline">
+            {bot.identity.avatarUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img className="avatar" src={bot.identity.avatarUrl} alt="" width={76} height={76} />
+            ) : (
+              <span className="avatar" aria-hidden="true">
+                {initialsOf(bot.identity.displayName)}
+              </span>
+            )}
+            <div className="profile-name">
+              <h2>{bot.identity.displayName}</h2>
+              <span className="username">@{bot.identity.username.replace(/^@/, "")}</span>
+            </div>
+            <Pill tone="ok">Connected</Pill>
+
+            <label className="master-row">
+              <span className="labels">
+                <strong>Job notifications</strong>
+                <small>{bot.masterEnabled ? "Master delivery is on" : "Master delivery is off"}</small>
+              </span>
               <input
-                className="input mono"
-                aria-label="New bot token"
-                type="password"
-                value={token}
-                onChange={(event) => setToken(event.target.value)}
-                placeholder="New token"
-                autoComplete="off"
-                spellCheck={false}
+                type="checkbox"
+                role="switch"
+                className="switch"
+                checked={bot.masterEnabled}
+                disabled={Boolean(busy)}
+                onChange={(event) => void setMaster(event.target.checked)}
               />
-              <button
-                className="button button-secondary"
-                type="button"
-                disabled={Boolean(busy) || !token}
+            </label>
+
+            <div className="profile-actions">
+              <Button
+                variant="secondary"
+                disabled={Boolean(busy)}
+                busy={busy === "test"}
+                busyLabel="Sending…"
+                onClick={() => void sendTest()}
+              >
+                Send test
+              </Button>
+              <Button
+                variant="secondary"
+                disabled={Boolean(busy)}
                 onClick={() => {
-                  if (validToken(token)) setConfirmation({ kind: "replace", token: token.trim() });
+                  setNotice("");
+                  setReplacing(true);
                 }}
               >
-                Change token
-              </button>
-              <button
-                className="button button-quiet danger-text"
-                type="button"
+                Change token…
+              </Button>
+              <Button
+                variant="danger-quiet"
                 disabled={Boolean(busy)}
-                onClick={() => setConfirmation({ kind: "disconnect" })}
+                onClick={() => {
+                  setNotice("");
+                  setConfirmation({ kind: "disconnect" });
+                }}
               >
-                Disconnect
-              </button>
+                Disconnect…
+              </Button>
             </div>
-          </section>
 
-          <section aria-labelledby="subscribers">
-            <div className="section-heading">
-              <h2 id="subscribers">Subscribers</h2>
-              <span className="muted">{subscribers.length} total</span>
+            <div className="token-line">
+              <p className="microlabel">Connection token</p>
+              <code title="Stored encrypted; shown masked only">{bot.maskedToken}</code>
             </div>
-            {subscribers.length ? (
-              <div className="subscriber-list" role="list">
-                {subscribers.map((subscriber) => {
-                  const unavailable = subscriber.status === "unavailable" || subscriber.status === "blocked";
+          </div>
+        </section>
+
+        <section aria-labelledby="subscribers">
+          <div className="section-head">
+            <h2 id="subscribers">
+              Subscribers <span className="count">· {subscribers.length} total</span>
+            </h2>
+          </div>
+          {subscribers.length ? (
+            <div className="dlist">
+              <ul>
+                {subscribers.map((subscriber, index) => {
+                  const unavailable =
+                    subscriber.status === "unavailable" || subscriber.status === "blocked";
                   const enabled = subscriber.status === "active";
                   return (
-                    <article className="subscriber-row" role="listitem" key={subscriber.id}>
-                      <div className="subscriber-person">
-                        <span className="subscriber-avatar" aria-hidden="true">
-                          {subscriber.displayName.charAt(0).toUpperCase()}
-                        </span>
-                        <div>
-                          <strong>{subscriber.displayName}</strong>
-                          <span>{subscriber.username ? `@${subscriber.username.replace(/^@/, "")}` : "No username"}</span>
+                    <li key={subscriber.id} style={{ "--i": Math.min(index, 12) } as React.CSSProperties}>
+                      <article className="sub-row">
+                        <div className="sub-person">
+                          <span className="sub-avatar" aria-hidden="true">
+                            {initialsOf(subscriber.displayName)}
+                          </span>
+                          <div>
+                            <strong>{subscriber.displayName}</strong>
+                            <span>
+                              {subscriber.username
+                                ? `@${subscriber.username.replace(/^@/, "")}`
+                                : "No username"}
+                            </span>
+                          </div>
                         </div>
-                      </div>
-                      <StatusPill tone={enabled ? "good" : subscriber.status === "pending" ? "warn" : unavailable ? "bad" : "neutral"}>
-                        {subscriberLabel(subscriber.status)}
-                      </StatusPill>
-                      <button
-                        className="button button-secondary subscriber-action"
-                        type="button"
-                        disabled={Boolean(busy) || unavailable}
-                        onClick={() => void updateSubscriber(subscriber, !enabled)}
-                      >
-                        {busy === subscriber.id
-                          ? "Saving..."
-                          : unavailable
-                            ? "Unavailable"
-                            : subscriber.status === "pending"
-                              ? "Approve"
-                              : enabled
-                                ? "Turn off"
-                                : "Turn on"}
-                      </button>
-                    </article>
+                        <Pill tone={subscriberTone(subscriber.status)} hollow={subscriber.status === "off"}>
+                          {subscriberLabel(subscriber.status)}
+                        </Pill>
+                        <span className="sub-action">
+                          <Button
+                            variant={subscriber.status === "pending" ? "primary" : "secondary"}
+                            disabled={Boolean(busy) || unavailable}
+                            busy={busy === subscriber.id}
+                            busyLabel="Saving…"
+                            onClick={() => void updateSubscriber(subscriber, !enabled)}
+                            style={{ minWidth: 104 }}
+                          >
+                            {unavailable
+                              ? "Unavailable"
+                              : subscriber.status === "pending"
+                                ? "Approve"
+                                : enabled
+                                  ? "Turn off"
+                                  : "Turn on"}
+                          </Button>
+                        </span>
+                      </article>
+                    </li>
                   );
                 })}
-              </div>
-            ) : (
-              <EmptyState title="No subscribers">New Telegram subscribers appear here as pending.</EmptyState>
-            )}
-          </section>
-        </>
-      )}
+              </ul>
+            </div>
+          ) : (
+            <EmptyState title="No subscribers" icon={<IconBot size={18} />}>
+              New Telegram subscribers appear here as pending.
+            </EmptyState>
+          )}
+        </section>
+      </div>
+
+      {replacing ? (
+        <ReplaceTokenDialog
+          onClose={() => setReplacing(false)}
+          onDone={async () => {
+            setReplacing(false);
+            await load();
+          }}
+        />
+      ) : null}
 
       <ConfirmDialog
         open={Boolean(confirmation)}
-        busy={busy === "disconnect" || busy === "replace"}
-        destructive={confirmation?.kind === "disconnect"}
-        title={confirmation?.kind === "disconnect" ? "Disconnect bot?" : "Replace bot token?"}
-        confirmLabel={confirmation?.kind === "disconnect" ? "Disconnect" : "Replace token"}
-        onClose={() => setConfirmation(undefined)}
-        onConfirm={() => void runConfirmedAction()}
+        busy={busy === "disconnect"}
+        destructive
+        title="Disconnect bot?"
+        confirmLabel="Disconnect"
+        onClose={() => {
+          setConfirmation(undefined);
+          setNotice("");
+        }}
+        onConfirm={() => void disconnect()}
       >
-        <p>
-          {confirmation?.kind === "disconnect"
-            ? "Notifications stop immediately. Subscriber history remains stored."
-            : "Worker verifies new token before replacing current connection."}
-        </p>
+        <p>Notifications stop immediately. Subscriber history remains stored.</p>
+        {notice ? <Notice>{notice}</Notice> : null}
       </ConfirmDialog>
     </>
   );
