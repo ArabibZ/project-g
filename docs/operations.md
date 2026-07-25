@@ -14,6 +14,7 @@ One Durable Object named `scheduler-v1` owns scheduling. It persists pause state
 - Enabling a source never resumes a paused scheduler.
 - Reordering affects the next complete cycle.
 - Three consecutive failures expose an error while retrying continues.
+- `Run now` is AAL2-protected, rate-limited, and idempotent. It rejects paused, active, or already queued schedulers instead of stacking another batch.
 
 ## Baseline
 
@@ -25,7 +26,7 @@ Connect validates the token with Telegram, encrypts token and webhook secret usi
 
 Private `/start` requests create Pending subscribers and reply exactly `Request received. Waiting for admin approval.` Admin approval enables future-only alerts. Repeated `/start` never reverses an admin disable. Blocked/unavailable chats are turned Off and are not retried.
 
-Each genuine new job creates at most one delivery per chat. Temporary known failures retry at most three times without another scrape. Ambiguous network outcomes are not retried, preferring a rare missed alert over a duplicate successful alert. Telegram HTML is escaped before sending.
+Each genuine new job creates at most one delivery per chat. The message highlights seats left and includes a direct `Open Job` button. Temporary known failures retry at most three times without another scrape. Ambiguous network outcomes are not retried, preferring a rare missed alert over a duplicate successful alert. Telegram HTML is escaped before sending.
 
 ## Recovery
 
@@ -36,7 +37,7 @@ No forgot-password link is public. Start recovery only from Supabase Dashboard f
 Every protected read performs fresh JWT, AAL2, live-session, and admin authorization. Only the resulting non-secret data payload can be cached.
 
 - Dashboard and sources: 5 seconds.
-- Bot and subscribers: 10 seconds.
+- Bot, subscribers, and sanitized Operations activity: 10 seconds.
 - Job history: 15 seconds.
 - Maximum: 64 entries per Worker isolate.
 - Successful mutations and Telegram webhook handling clear that isolate's cache.

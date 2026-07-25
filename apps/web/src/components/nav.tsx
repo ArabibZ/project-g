@@ -4,15 +4,31 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState, useSyncExternalStore } from "react";
 import { BrandLockup } from "@/components/logo";
-import { Button, IconBot, IconGauge, IconJobs, IconLogout, IconSources } from "@/components/ui";
+import {
+  Button,
+  IconActivity,
+  IconBot,
+  IconGauge,
+  IconJobs,
+  IconLogout,
+  IconSources
+} from "@/components/ui";
 import { formatDhakaClock } from "@/lib/format";
 
-const links = [
+type NavItem = {
+  href: string;
+  label: string;
+  dockLabel?: string;
+  icon: typeof IconGauge;
+};
+
+const links: readonly NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: IconGauge },
   { href: "/sources", label: "Sources", icon: IconSources },
   { href: "/bot", label: "Bot", icon: IconBot },
-  { href: "/jobs", label: "Jobs", icon: IconJobs }
-] as const;
+  { href: "/jobs", label: "Jobs", icon: IconJobs },
+  { href: "/operations", label: "Operations", dockLabel: "Ops", icon: IconActivity }
+];
 
 const CLOCK_INTERVAL_MS = 30_000;
 
@@ -88,7 +104,13 @@ export function Nav() {
 
       <nav className="tb-nav" aria-label="Main navigation">
         {links.map((link) => (
-          <NavLink key={link.href} {...link} iconSize={15} />
+          <NavLink
+            key={link.href}
+            href={link.href}
+            label={link.label}
+            icon={link.icon}
+            iconSize={15}
+          />
         ))}
       </nav>
 
@@ -107,7 +129,13 @@ export function BottomDock() {
   return (
     <nav className="bottom-nav" aria-label="Main navigation">
       {links.map((link) => (
-        <NavLink key={link.href} {...link} iconSize={19} />
+        <NavLink
+          key={link.href}
+          href={link.href}
+          label={link.dockLabel ?? link.label}
+          icon={link.icon}
+          iconSize={19}
+        />
       ))}
     </nav>
   );

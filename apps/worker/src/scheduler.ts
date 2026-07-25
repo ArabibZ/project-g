@@ -277,17 +277,28 @@ export class SchedulerCoordinator extends DurableObject<Env> {
 
   async runNow(): Promise<SchedulerAction> {
     if (await this.pauseRequested()) return { accepted: false, state: await this.status() };
+    const now = Date.now();
     const lock = await this.ctx.storage.get<RunLock>("runLock");
-    if (lock && lock.expiresAt > Date.now()) {
-      await this.ctx.storage.put("runAfterCurrent", true);
-    } else {
-      const nextRun = Date.now();
-      await this.ctx.storage.put("nextBatchAt", nextRun);
-      await this.updatePublicState({
-        status: "waiting",
-        next_run_at: new Date(nextRun).toISOString()
-      });
+    const batch = await this.ctx.storage.get<BatchState>("batch");
+    const nextBatchAt = await this.ctx.storage.get<number>("nextBatchAt");
+    if (
+      (lock !== undefined && lock.expiresAt > now)
+      || batch !== undefined
+      || (nextBatchAt !== undefined && nextBatchAt <= now + 1_000)
+    ) {
+      await this.ctx.storage.delete("runAfterCurrent");
+      return { accepted: false, state: await this.status() };
     }
+
+    if (lock) await this.ctx.storage.delete("runLock");
+    await Promise.all([
+      this.ctx.storage.put("nextBatchAt", now),
+      this.ctx.storage.delete("runAfterCurrent")
+    ]);
+    await this.updatePublicState({
+      status: "waiting",
+      next_run_at: new Date(now).toISOString()
+    });
     await this.scheduleNextAlarm();
     return { accepted: true, state: await this.status() };
   }

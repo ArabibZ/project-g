@@ -286,7 +286,7 @@ h1, h2, h3 { margin: 0; font-weight: 650; letter-spacing: -0.012em; }
   right: 12px;
   bottom: calc(10px + env(safe-area-inset-bottom, 0px));
   display: none;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   border: 1px solid var(--line);
   border-radius: 22px;
   background: rgb(255 255 255 / 97%);
@@ -403,6 +403,61 @@ h1, h2, h3 { margin: 0; font-weight: 650; letter-spacing: -0.012em; }
 .hero-times strong { font-family: var(--font-mono); font-size: 13.5px; font-weight: 600; white-space: nowrap; }
 .hero-times span.abs { color: var(--ink-3); font-family: var(--font-mono); font-size: 10.5px; white-space: nowrap; }
 .hero-side .btn { justify-self: stretch; }
+.hero-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+/* ================= operations ================= */
+.ops-head {
+  display: grid;
+  gap: 10px;
+  max-width: 720px;
+  padding: 22px 0 28px;
+}
+.ops-head h1 {
+  font-family: var(--font-display);
+  font-size: clamp(38px, 5vw, 54px);
+  font-weight: 590;
+  font-variation-settings: "opsz" 90;
+  letter-spacing: -0.015em;
+  line-height: 1;
+}
+.ops-head > p:last-child { color: var(--ink-2); font-size: 14.5px; line-height: 1.6; }
+.ops-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.ops-panel {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-m);
+  background: var(--card);
+  box-shadow: var(--shadow-sm);
+}
+.ops-panel .section-head { align-items: center; margin-bottom: 10px; }
+.ops-panel .count { color: var(--ink-3); font-family: var(--font-mono); font-size: 11px; }
+.ops-list { display: grid; list-style: none; }
+.ops-row { display: grid; gap: 6px; padding: 13px 0; border-top: 1px solid var(--line); }
+.ops-row:first-child { border-top: 0; }
+.ops-row-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
+.ops-row-head strong { min-width: 0; overflow-wrap: anywhere; font-size: 13.5px; }
+.ops-id { font-family: var(--font-mono); font-size: 12px !important; }
+.ops-status {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  background: var(--well);
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.ops-ok { border-color: color-mix(in srgb, var(--ok) 38%, var(--line)); color: var(--ok); }
+.ops-warn { border-color: color-mix(in srgb, var(--warn) 42%, var(--line)); color: var(--warn); }
+.ops-bad { border-color: color-mix(in srgb, var(--bad) 38%, var(--line)); color: var(--bad); }
+.ops-counts { color: var(--ink-2); font-size: 12.5px; line-height: 1.5; }
+.ops-meta { color: var(--ink-3); font-family: var(--font-mono); font-size: 10.5px; line-height: 1.5; }
+.ops-error { color: var(--bad); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.ops-empty { padding: 24px 4px; color: var(--ink-3); font-size: 13px; }
 
 /* ================= dashboard metrics + jobs ================= */
 .bento { display: flex; flex-direction: column; gap: 26px; }
@@ -1300,12 +1355,17 @@ a.name:hover { color: var(--accent); text-decoration: underline; text-underline-
 }
 
 /* ================= responsive ================= */
+@media (max-width: 1160px) {
+  .tb .clock, .tb-divider { display: none; }
+}
+
 @media (max-width: 1060px) {
   .split { grid-template-columns: 1fr; }
   .split-intro { position: static; }
   .hero { flex-direction: column; align-items: stretch; gap: 20px; }
   .hero-side { justify-items: stretch; min-width: 0; }
   .hero-side .btn { width: 100%; }
+  .ops-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 940px) {
@@ -1415,6 +1475,7 @@ a.name:hover { color: var(--accent); text-decoration: underline; text-underline-
 
 @media (max-width: 560px) {
   .tb .clock { display: none; }
+  .hero-actions { grid-template-columns: 1fr; }
   .hero-times { grid-template-columns: 1fr; }
   .hero-times > div { border-left: 0; border-top: 1px solid var(--line); }
   .hero-times > div:first-child { border-top: 0; }

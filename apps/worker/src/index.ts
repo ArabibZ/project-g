@@ -93,6 +93,36 @@ const dashboardRowSchema = z.object({
   bot_users_pending: countSchema,
   latest_jobs: z.array(jobRowSchema)
 }).strict();
+const runStatusSchema = z.enum(["running", "succeeded", "partial", "failed"]);
+const deliveryStatusSchema = z.enum(["pending", "sending", "sent", "skipped", "failed"]);
+const operationRunRowSchema = z.object({
+  status: runStatusSchema,
+  forced_notifications_off: z.boolean(),
+  sources_total: countSchema,
+  sources_completed: countSchema,
+  valid_jobs_seen: countSchema,
+  new_jobs_saved: countSchema,
+  started_at: z.string(),
+  finished_at: z.string().nullable()
+}).strict();
+const operationDeliveryRowSchema = z.object({
+  job_id: z.string().min(1),
+  status: deliveryStatusSchema,
+  attempts: z.number().int().min(0).max(3),
+  last_error: z.string().nullable(),
+  created_at: z.string(),
+  sent_at: z.string().nullable()
+}).strict();
+const operationAuditRowSchema = z.object({
+  action: z.string().min(1),
+  entity_type: z.string().min(1),
+  created_at: z.string()
+}).strict();
+const operationLoginRowSchema = z.object({
+  successful: z.boolean(),
+  suspicious: z.boolean(),
+  created_at: z.string()
+}).strict();
 const cursorSchema = z.object({
   t: z.string().datetime({ offset: true }).max(64),
   id: z.string().regex(/^\d+$/)
@@ -136,6 +166,15 @@ function jobJson(row: JobRow) {
     sourceUrl: row.source_url,
     firstSeenAt: row.first_seen_at
   };
+}
+
+function safeOperationalText(value: string, maxLength: number): string {
+  let cleaned = "";
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    cleaned += code < 32 || code === 127 ? " " : character;
+  }
+  return cleaned.replace(/\s+/g, " ").trim().slice(0, maxLength);
 }
 
 function botJson(status: TelegramBotStatus) {
@@ -325,6 +364,78 @@ async function dashboard(env: Env) {
   };
 }
 
+async function operations(env: Env) {
+  const db = adminDb(env);
+  const [runsResult, deliveriesResult, auditsResult, loginsResult] = await Promise.all([
+    db
+      .from("scrape_runs")
+      .select(
+        "status, forced_notifications_off, sources_total, sources_completed, valid_jobs_seen, new_jobs_saved, started_at, finished_at"
+      )
+      .order("started_at", { ascending: false })
+      .limit(12)
+      .abortSignal(dbSignal()),
+    db
+      .from("notification_deliveries")
+      .select("job_id, status, attempts, last_error, created_at, sent_at")
+      .order("created_at", { ascending: false })
+      .limit(15)
+      .abortSignal(dbSignal()),
+    db
+      .from("audit_log")
+      .select("action, entity_type, created_at")
+      .order("created_at", { ascending: false })
+      .limit(15)
+      .abortSignal(dbSignal()),
+    db
+      .from("login_attempts")
+      .select("successful, suspicious, created_at")
+      .order("created_at", { ascending: false })
+      .limit(15)
+      .abortSignal(dbSignal())
+  ]);
+
+  if (runsResult.error || deliveriesResult.error || auditsResult.error || loginsResult.error) {
+    throw new Error("Unable to load operations");
+  }
+
+  const runs = z.array(operationRunRowSchema).parse(runsResult.data);
+  const deliveries = z.array(operationDeliveryRowSchema).parse(deliveriesResult.data);
+  const audits = z.array(operationAuditRowSchema).parse(auditsResult.data);
+  const logins = z.array(operationLoginRowSchema).parse(loginsResult.data);
+
+  return {
+    runs: runs.map((row) => ({
+      status: row.status,
+      forcedNotificationsOff: row.forced_notifications_off,
+      sourcesTotal: row.sources_total,
+      sourcesCompleted: row.sources_completed,
+      validJobsSeen: row.valid_jobs_seen,
+      newJobsSaved: row.new_jobs_saved,
+      startedAt: row.started_at,
+      finishedAt: row.finished_at
+    })),
+    deliveries: deliveries.map((row) => ({
+      jobId: safeOperationalText(row.job_id, 80),
+      status: row.status,
+      attempts: row.attempts,
+      lastError: row.last_error ? safeOperationalText(row.last_error, 180) : null,
+      createdAt: row.created_at,
+      sentAt: row.sent_at
+    })),
+    audits: audits.map((row) => ({
+      action: safeOperationalText(row.action, 80),
+      entityType: safeOperationalText(row.entity_type, 80),
+      createdAt: row.created_at
+    })),
+    logins: logins.map((row) => ({
+      successful: row.successful,
+      suspicious: row.suspicious,
+      createdAt: row.created_at
+    }))
+  };
+}
+
 const app = new Hono<AppEnv>();
 
 app.use("*", secureHeaders({
@@ -412,6 +523,21 @@ app.post("/api/scheduler/resume", async (context) => {
   const result = await getSchedulerStub(context.env).resume();
   invalidateReadCache();
   await audit(context.env, admin.userId, "scheduler.resume", "scheduler", "scheduler-v1");
+  return context.json(result);
+});
+
+app.post("/api/scheduler/run", async (context) => {
+  const admin = await adminFromRequest(context, true);
+  await enforceMutationLimit(context.env, admin.userId, "scheduler.run", 10);
+  const result = await getSchedulerStub(context.env).runNow();
+  if (!result.accepted) {
+    return context.json({
+      ...result,
+      error: "Scheduler is paused, already running, or already queued"
+    }, 409);
+  }
+  invalidateReadCache();
+  await audit(context.env, admin.userId, "scheduler.run", "scheduler", "scheduler-v1");
   return context.json(result);
 });
 
@@ -697,6 +823,16 @@ app.patch("/api/bot/subscribers/:id", async (context) => {
   invalidateReadCache();
   await audit(context.env, admin.userId, "subscriber.update", "telegram_subscriber", id, { enabled });
   return context.json({ subscriber: subscriberJson(subscriber) });
+});
+
+app.get("/api/operations", async (context) => {
+  const admin = await adminFromRequest(context, true);
+  const env = context.env;
+  return context.json(await cachedRead(
+    JSON.stringify([admin.userId, "/api/operations"]),
+    10_000,
+    () => operations(env)
+  ));
 });
 
 app.notFound((context) => context.json({ error: "Not found" }, 404));

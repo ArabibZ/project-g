@@ -84,6 +84,38 @@ export const jobsSchema = z.object({
   nextCursor: z.string().nullable()
 });
 
+const operationTimestampSchema = z.string().datetime({ offset: true });
+export const operationsSchema = z.object({
+  runs: z.array(z.object({
+    status: z.enum(["running", "succeeded", "partial", "failed"]),
+    forcedNotificationsOff: z.boolean(),
+    sourcesTotal: z.number().int().nonnegative(),
+    sourcesCompleted: z.number().int().nonnegative(),
+    validJobsSeen: z.number().int().nonnegative(),
+    newJobsSaved: z.number().int().nonnegative(),
+    startedAt: operationTimestampSchema,
+    finishedAt: operationTimestampSchema.nullable()
+  }).strict()).max(12),
+  deliveries: z.array(z.object({
+    jobId: z.string().min(1).max(80),
+    status: z.enum(["pending", "sending", "sent", "skipped", "failed"]),
+    attempts: z.number().int().min(0).max(3),
+    lastError: z.string().max(180).nullable(),
+    createdAt: operationTimestampSchema,
+    sentAt: operationTimestampSchema.nullable()
+  }).strict()).max(15),
+  audits: z.array(z.object({
+    action: z.string().min(1).max(80),
+    entityType: z.string().min(1).max(80),
+    createdAt: operationTimestampSchema
+  }).strict()).max(15),
+  logins: z.array(z.object({
+    successful: z.boolean(),
+    suspicious: z.boolean(),
+    createdAt: operationTimestampSchema
+  }).strict()).max(15)
+}).strict();
+
 export const enrollmentSchema = z.object({
   qrCode: z.string().startsWith("data:image/"),
   secret: z.string().min(8),
@@ -97,5 +129,6 @@ export const loginResultSchema = z.object({
 export type Bot = z.infer<typeof botSchema>;
 export type Dashboard = z.infer<typeof dashboardSchema>;
 export type Job = z.infer<typeof jobSchema>;
+export type Operations = z.infer<typeof operationsSchema>;
 export type Source = z.infer<typeof sourceSchema>;
 export type Subscriber = z.infer<typeof subscriberSchema>;

@@ -108,6 +108,9 @@ const telegramUpdateSchema = z.object({
 type BotSettings = z.infer<typeof botSettingsSchema>;
 type SubscriberRow = z.infer<typeof subscriberSchema>;
 type TelegramFailureKind = "blocked" | "unavailable" | "temporary" | "permanent";
+type TelegramReplyMarkup = {
+  inline_keyboard: Array<Array<{ text: string; url: string }>>;
+};
 
 export class TelegramApiError extends Error {
   readonly kind: TelegramFailureKind;
@@ -516,12 +519,14 @@ async function sendMessage(
   token: string,
   chatId: number,
   text: string,
-  html = false
+  html = false,
+  replyMarkup?: TelegramReplyMarkup
 ): Promise<number> {
   const result = await telegramCall(token, "sendMessage", {
     chat_id: chatId,
     text,
-    ...(html ? { parse_mode: "HTML", link_preview_options: { is_disabled: true } } : {})
+    ...(html ? { parse_mode: "HTML", link_preview_options: { is_disabled: true } } : {}),
+    ...(replyMarkup ? { reply_markup: replyMarkup } : {})
   }, sentMessageSchema);
   return result.message_id;
 }
@@ -745,14 +750,19 @@ export async function handleTelegramWebhook(env: Env, request: Request): Promise
 }
 
 export function jobMessage(job: z.infer<typeof jobSchema>): string {
+  const seatsLeft = Math.max(job.total_target - job.done_count, 0);
   return [
-    "<b>NEW</b>",
-    `<b>ID:</b> ${escapeTelegramHtml(job.job_id)}`,
+    "<b>NEW JOB</b>",
+    `<b>Seats left:</b> ${seatsLeft}`,
     `<b>Name:</b> ${escapeTelegramHtml(job.name)}`,
-    `<b>Progress:</b> ${job.done_count}/${job.total_target}`,
+    `<b>Progress:</b> ${job.done_count}/${job.total_target} done`,
     `<b>Payment:</b> ${escapeTelegramHtml(job.payment)}`,
-    `<a href="${escapeTelegramHtml(job.details_url)}">Open Job</a>`
+    `<b>ID:</b> ${escapeTelegramHtml(job.job_id)}`
   ].join("\n");
+}
+
+export function jobKeyboard(job: z.infer<typeof jobSchema>): TelegramReplyMarkup {
+  return { inline_keyboard: [[{ text: "Open Job", url: job.details_url }]] };
 }
 
 export function telegramRetryDelaySeconds(
@@ -901,7 +911,13 @@ export async function processDueNotifications(
     }
 
     try {
-      const messageId = await sendMessage(freshBot.token, candidate.chat_id, jobMessage(job), true);
+      const messageId = await sendMessage(
+        freshBot.token,
+        candidate.chat_id,
+        jobMessage(job),
+        true,
+        jobKeyboard(job)
+      );
       await finishDelivery(env, candidate.id, {
         status: "sent",
         lease_until: null,

@@ -61,6 +61,12 @@ export const IconJobs = icon(
     <path d="M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2M4 12h16" />
   </>
 );
+export const IconActivity = icon(
+  <>
+    <path d="M4 19V9M10 19V5M16 19v-7M22 19H2" />
+    <path d="m3 6 5-3 6 5 7-5" />
+  </>
+);
 export const IconLogout = icon(
   <>
     <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />

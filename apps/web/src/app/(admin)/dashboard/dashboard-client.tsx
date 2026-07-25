@@ -63,7 +63,7 @@ export function DashboardClient({
   const [error, setError] = useState("");
   const [actionError, setActionError] = useState("");
   const [confirming, setConfirming] = useState(false);
-  const [acting, setActing] = useState(false);
+  const [schedulerAction, setSchedulerAction] = useState<"pause" | "resume" | "run" | "">("");
 
   async function load() {
     try {
@@ -78,11 +78,12 @@ export function DashboardClient({
 
   const paused = data.scheduler.status === "paused" || data.scheduler.status === "no_active_sources";
   const meta = statusMeta[data.scheduler.status];
+  const acting = schedulerAction !== "";
 
   async function changeScheduler() {
     const action = paused ? "resume" : "pause";
     setConfirming(false);
-    setActing(true);
+    setSchedulerAction(action);
     setActionError("");
     if (action === "pause") {
       setData({ ...data, scheduler: { ...data.scheduler, status: "pausing" } });
@@ -94,7 +95,21 @@ export function DashboardClient({
       setActionError(mutationError instanceof Error ? mutationError.message : "Scheduler update failed");
       await load();
     } finally {
-      setActing(false);
+      setSchedulerAction("");
+    }
+  }
+
+  async function runNow() {
+    setSchedulerAction("run");
+    setActionError("");
+    try {
+      await api("/api/scheduler/run", { method: "POST", body: "{}" });
+      await load();
+    } catch (mutationError) {
+      setActionError(mutationError instanceof Error ? mutationError.message : "Could not start a check");
+      await load();
+    } finally {
+      setSchedulerAction("");
     }
   }
 
@@ -109,7 +124,7 @@ export function DashboardClient({
               pulse={"pulse" in meta && meta.pulse}
               hollow={"hollow" in meta && meta.hollow}
             >
-              {acting && !paused ? "Pausing" : meta.label}
+              {schedulerAction === "pause" ? "Pausing" : meta.label}
             </Pill>
           </div>
           <h1 className="hero-title" role="status">
@@ -150,15 +165,26 @@ export function DashboardClient({
               </span>
             </div>
           </div>
-          <Button
-            variant={paused ? "primary" : "secondary"}
-            busy={acting}
-            busyLabel={paused ? "Resuming…" : "Pausing…"}
-            disabled={acting || data.scheduler.status === "pausing"}
-            onClick={() => setConfirming(true)}
-          >
-            {paused ? "Resume checks" : "Pause checks"}
-          </Button>
+          <div className="hero-actions">
+            <Button
+              variant="primary"
+              busy={schedulerAction === "run"}
+              busyLabel="Starting…"
+              disabled={acting || !["waiting", "error"].includes(data.scheduler.status)}
+              onClick={() => void runNow()}
+            >
+              Run now
+            </Button>
+            <Button
+              variant={paused ? "primary" : "secondary"}
+              busy={schedulerAction === "pause" || schedulerAction === "resume"}
+              busyLabel={paused ? "Resuming…" : "Pausing…"}
+              disabled={acting || data.scheduler.status === "pausing"}
+              onClick={() => setConfirming(true)}
+            >
+              {paused ? "Resume checks" : "Pause checks"}
+            </Button>
+          </div>
         </div>
       </section>
 

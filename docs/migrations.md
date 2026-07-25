@@ -18,6 +18,7 @@ Current migrations:
 - `20260720000200_security_hardening.sql`: live auth-session revocation check with service-role-only access.
 - `20260721000000_admin_read_optimization.sql`: combined admin authorization and aggregate dashboard RPCs.
 - `20260721000100_dashboard_query_optimization.sql`: keeps the dashboard's Dhaka-day count on the indexed job subset as history grows.
+- `20260725000000_operations_indexes.sql`: keeps bounded delivery and login-security activity reads on descending timestamp indexes.
 
 Applied migrations are append-only. Add a new timestamped migration for every production change; do not rewrite production history.
 

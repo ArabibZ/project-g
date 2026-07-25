@@ -1,6 +1,6 @@
 # Project G
 
-Private, single-admin dashboard for monitoring GigClickers jobs and delivering approved Telegram notifications.
+Single-admin dashboard for monitoring GigClickers jobs and delivering approved Telegram notifications. The application is private; its source repository is public.
 
 ## Production
 
@@ -10,7 +10,7 @@ Private, single-admin dashboard for monitoring GigClickers jobs and delivering a
 - Vercel project: `project-g`
 - Supabase project: `project-g` (`dmnzsknqynysqpapilwu`)
 - Turnstile widget: `project-g-login` (managed, production hostname only)
-- GitHub: `ArabibZ/project-g` (private)
+- GitHub: `ArabibZ/project-g` (public)
 
 ## Architecture
 
@@ -28,7 +28,7 @@ Browser receives no Supabase key or session token. The BFF keeps sessions in `Se
 - Protected pages load their authenticated DTO once in a Server Component. They do not repeat the same GET after hydration.
 - Admin navigation prefetch is disabled so idle links do not consume Vercel or Worker requests.
 - Worker authorization uses one service-role RPC after local JWT verification. Dashboard data uses one aggregate RPC instead of six to nine REST reads.
-- A bounded, isolate-local cache stores only successful non-secret read DTOs after full live authorization. Limits: 64 entries; dashboard/sources 5 seconds, bot/subscribers 10 seconds, jobs 15 seconds. Writes invalidate the local cache.
+- A bounded, isolate-local cache stores only successful non-secret read DTOs after full live authorization. Limits: 64 entries; dashboard/sources 5 seconds, bot/subscribers/operations 10 seconds, jobs 15 seconds. Writes invalidate the local cache.
 - Auth, AAL2, session revocation, admin role, tokens, and secrets are never cached. API responses remain `no-store`.
 
 Measured production dashboard p50 improved from `1319ms` to `52ms`; BFF p50 improved from `1644ms` to `116ms`. A cold desktop browser run reached LCP in `2.02s`, warm runs in `120-880ms`, and simulated mobile 4G in `940ms`. Initial dashboard Worker calls dropped from two to one; warm Supabase subrequests dropped from about 12 to two on a payload miss or one on an isolate cache hit.

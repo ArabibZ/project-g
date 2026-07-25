@@ -15,8 +15,10 @@ import { ReadCache } from "../apps/worker/src/lib/read-cache";
 import { parseJobsHtml } from "../apps/worker/src/scraper";
 import { safeReturnTo } from "../apps/web/src/lib/safe-return-to";
 import { requestJson } from "../apps/web/src/lib/server/request-json";
+import { operationsSchema } from "../apps/web/src/lib/contracts";
 import {
   classifyTelegramError,
+  jobKeyboard,
   jobMessage,
   telegramRetryDelaySeconds
 } from "../apps/worker/src/telegram";
@@ -87,13 +89,28 @@ describe("Telegram HTML and delivery policy", () => {
       payment: "$0.01 & bonus",
       details_url: 'https://bot.gigclickers.com/tasks/7/details?a=1&b="x"'
     })).toBe([
-      "<b>NEW</b>",
-      "<b>ID:</b> 7&lt;&amp;",
+      "<b>NEW JOB</b>",
+      "<b>Seats left:</b> 1",
       "<b>Name:</b> &lt;b&gt;A&amp;B &quot;job&quot;&lt;/b&gt;",
-      "<b>Progress:</b> 1/2",
+      "<b>Progress:</b> 1/2 done",
       "<b>Payment:</b> $0.01 &amp; bonus",
-      '<a href="https://bot.gigclickers.com/tasks/7/details?a=1&amp;b=&quot;x&quot;">Open Job</a>'
+      "<b>ID:</b> 7&lt;&amp;"
     ].join("\n"));
+  });
+
+  test("builds a direct job button and never reports negative seats", () => {
+    const job = {
+      job_id: "7",
+      name: "Complete job",
+      done_count: 2,
+      total_target: 2,
+      payment: "$0.01",
+      details_url: "https://bot.gigclickers.com/tasks/7/details"
+    };
+    expect(jobMessage(job)).toContain("<b>Seats left:</b> 0");
+    expect(jobKeyboard(job)).toEqual({
+      inline_keyboard: [[{ text: "Open Job", url: job.details_url }]]
+    });
   });
 
   test("classifies permanent subscriber failures and temporary retries", () => {
@@ -110,6 +127,41 @@ describe("Telegram HTML and delivery policy", () => {
   test("uses linear retry floor but respects Telegram retry_after", () => {
     expect(telegramRetryDelaySeconds(1, null)).toBe(30);
     expect(telegramRetryDelaySeconds(2, 90)).toBe(90);
+  });
+});
+
+describe("operations response", () => {
+  test("accepts only the sanitized bounded contract", () => {
+    const timestamp = "2026-07-20T12:00:00Z";
+    expect(operationsSchema.parse({
+      runs: [{
+        status: "succeeded",
+        forcedNotificationsOff: false,
+        sourcesTotal: 1,
+        sourcesCompleted: 1,
+        validJobsSeen: 10,
+        newJobsSaved: 2,
+        startedAt: timestamp,
+        finishedAt: timestamp
+      }],
+      deliveries: [{
+        jobId: "142887",
+        status: "sent",
+        attempts: 1,
+        lastError: null,
+        createdAt: timestamp,
+        sentAt: timestamp
+      }],
+      audits: [{ action: "scheduler.run", entityType: "scheduler", createdAt: timestamp }],
+      logins: [{ successful: true, suspicious: false, createdAt: timestamp }]
+    }).deliveries[0]?.jobId).toBe("142887");
+
+    expect(operationsSchema.safeParse({
+      runs: [],
+      deliveries: [],
+      audits: [],
+      logins: [{ successful: false, suspicious: true, createdAt: timestamp, ipHash: "secret" }]
+    }).success).toBeFalse();
   });
 });
 
